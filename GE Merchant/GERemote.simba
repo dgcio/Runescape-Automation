@@ -1,0 +1,458 @@
+program GE_Remote;
+
+Var
+  Form : TForm;
+  HImage : TImage;
+  SLabel : Array [0..6] of TLabel;
+  StatusLabel : TLabel;
+  Button0, Button1,
+  Button2, FUpdate0,
+  FUpdate1, FUpdate2,
+  CDown0, CDown1,
+  CDown2, UpdateForm : TButton;
+  Input : Array [0..6] of TEdit;
+  FormStatus : String;
+  InfoLabel : Integer;
+  LabelCap, InputCap,
+  BtnCap, BuySellArr : TStringArray;
+  LabelTop, LabelLeft,
+  InputTop, InputLeft,
+  InputHeight, InputWidth,
+  BtnTop, BtnLeft,
+  BtnWidth : TIntegerArray;
+
+Const
+  RemotePath = AppPath + 'RemoteSettings.ini';
+
+procedure form_update(sender: TObject);
+begin
+  if (Form <> nil) then
+    Form.Refresh;
+end;
+
+Procedure LoadSettings(sender: TObject);
+Begin
+  Writeln('Loading Saved Settings...');
+End;
+
+Procedure DeclareVars;
+Begin
+  BuySellArr := [ReadINI('0', 'buy', RemotePath), ReadINI('0', 'sell', RemotePath), ReadINI('1', 'buy', RemotePath),
+                 ReadINI('1', 'sell', RemotePath), ReadINI('2', 'buy', RemotePath),  ReadINI('2', 'sell', RemotePath)];
+
+  {LabelArr}
+  LabelCap := ['Buy: ' + BuySellArr[0], 'Sell: ' + BuySellArr[1], 'Buy: ' + BuySellArr[2],
+               'Sell: ' + BuySellArr[3], 'Buy: ' + BuySellArr[4], 'Sell: ' + BuySellArr[5]];
+  LabelTop := [100, 125, 100, 125, 100, 125];
+  LabelLeft := [20, 20, 180, 180, 350, 350];
+
+  {ButtonArr}
+  BtnCap := ['U', 'U', 'U'];
+  BtnTop := [179, 179, 179, 205, 205, 205, 235, 235, 235, 267, 267];
+  BtnLeft := [125, 285, 455, 27, 189, 358, 27, 189, 358, 415, 320];
+  BtnWidth := [30, 30, 30, 85, 85, 85, 85, 85, 85, 85, 85];
+
+  {InputArr}
+  InputCap := [BuySellArr[0], BuySellArr[1], BuySellArr[2], BuySellArr[3], BuySellArr[4], BuySellArr[5]];
+  InputTop := [150, 180, 150, 180, 150, 180];
+  InputLeft := [20, 20, 180, 180, 350, 350];
+  InputWidth := [100, 100, 100, 100, 100, 100];
+  InputHeight := [20, 20, 20, 20, 20, 20];
+End;
+
+Procedure Update0(sender : TObject);
+Begin
+  WriteINI('0', 'buy', Input[0].Caption, RemotePath);
+  WriteINI('0', 'sell', Input[1].Caption, RemotePath);
+  FormStatus := 'BuyPrice Set to ' + ToStr(Input[0].Caption) + '; SellPrice Set to ' + Input[1].Caption;
+  StatusLabel.Caption := 'Status: ' + FormStatus;
+  Writeln(FormStatus);
+  Form.refresh;
+End;
+
+Procedure Update1(sender : TObject);
+Begin
+  WriteINI('1', 'buy', Input[2].Caption, RemotePath);
+  WriteINI('1', 'sell', Input[3].Caption, RemotePath);
+  FormStatus := 'BuyPrice Set to ' + ToStr(Input[2].Caption) + '; SellPrice Set to ' + Input[3].Caption;
+  StatusLabel.Caption := 'Status: ' + FormStatus;
+  Writeln(FormStatus);
+  Form.refresh;
+End;
+
+Procedure Update2(sender : TObject);
+Begin
+  WriteINI('2', 'buy', Input[4].Caption, RemotePath);
+  WriteINI('2', 'sell', Input[5].Caption, RemotePath);
+  FormStatus := 'BuyPrice Set to ' + ToStr(Input[5].Caption) + '; SellPrice Set to ' + Input[4].Caption;
+  StatusLabel.Caption := 'Status: ' + FormStatus;
+  Writeln(FormStatus);
+  Form.refresh;
+End;
+
+Procedure ForceUpdate0(sender : TObject);
+Begin
+  If ReadINI('0', 'ForceUpdate', RemotePath) = 'true' then
+  Begin
+    Writeln('ForceUpdate already True');
+    Exit;
+  End;
+  WriteINI('0', 'ForceUpdate', 'true', RemotePath);
+  FormStatus := 'ForceUpdate set to True for item 0';
+  StatusLabel.Caption := 'Status: ' + FormStatus;
+  Writeln(FormStatus);
+  Form.refresh;
+End;
+
+Procedure ForceUpdate1(sender : TObject);
+Begin
+  If ReadINI('1', 'ForceUpdate', RemotePath) = 'true' then
+  Begin
+    Writeln('ForceUpdate already True');
+    Exit;
+  End;
+  WriteINI('1', 'ForceUpdate', 'true', RemotePath);
+  FormStatus := 'ForceUpdate set to True for item 1';
+  StatusLabel.Caption := 'Status: ' + FormStatus;
+  Writeln(FormStatus);
+  Form.refresh;
+End;
+
+Procedure ForceUpdate2(sender : TObject);
+Begin
+  If ReadINI('2', 'ForceUpdate', RemotePath) = 'true' then
+  Begin
+    Writeln('ForceUpdate already True');
+    Exit;
+  End;
+  WriteINI('2', 'ForceUpdate', 'true', RemotePath);
+  FormStatus := 'ForceUpdate set to True for item 2';
+  StatusLabel.Caption := 'Status: ' + FormStatus;
+  Writeln(FormStatus);
+  Form.refresh;
+End;
+
+Procedure Cool0(sender : TObject);
+Begin
+  If ReadINI('0', 'Cooldown', RemotePath) = 'true' then
+  Begin
+    Writeln('Cooldown already True');
+    Exit;
+  End;
+  WriteINI('0', 'Cooldown', 'true', RemotePath);
+  FormStatus := 'Cooldown set to True for item 0';
+  StatusLabel.Caption := 'Status: ' + FormStatus;
+  Writeln(FormStatus);
+  Form.refresh
+End;
+
+Procedure Cool1(sender : TObject);
+Begin
+  If ReadINI('1', 'Cooldown', RemotePath) = 'true' then
+  Begin
+    Writeln('Cooldown already True');
+    Exit;
+  End;
+  WriteINI('1', 'Cooldown', 'true', RemotePath);
+  FormStatus := 'Cooldown set to True for item 1';
+  StatusLabel.Caption := 'Status: ' + FormStatus;
+  Writeln(FormStatus);
+  Form.refresh;
+End;
+
+Procedure Cool2(sender : TObject);
+Begin
+  If ReadINI('2', 'Cooldown', RemotePath) = 'true' then
+  Begin
+    Writeln('Cooldown already True');
+    Exit;
+  End;
+  WriteINI('2', 'Cooldown', 'true', RemotePath);
+  FormStatus := 'Cooldown set to True for item 2';
+  StatusLabel.Caption := 'Status: ' + FormStatus;
+  Writeln(FormStatus);
+  Form.refresh;
+End;
+
+Procedure UpdateInfo(sender : TObject);
+Var
+  i : Integer;
+  TArr : TStringArray;
+Begin
+  BuySellArr := [ReadINI('0', 'buy', RemotePath), ReadINI('0', 'sell', RemotePath), ReadINI('1', 'buy', RemotePath),
+                 ReadINI('1', 'sell', RemotePath), ReadINI('2', 'buy', RemotePath),  ReadINI('2', 'sell', RemotePath)];
+  TArr := ['[0]Buy: ', '[0]Sell: ', '[1]Buy: ', '[1]Sell: ', '[2]Buy: ', '[2]Sell: '];
+
+  For i := 0 to 5 do
+    SLabel[i].Caption := TArr[i] + BuySellArr[i];
+
+  For i := 0 to 5 do
+    Input[i].Caption := BuySellArr[i];
+End;
+
+Procedure DefaultSettings(sender : TObject);
+Var
+  IArr, IIArr : TStringArray;
+  i, ii : Integer;
+Begin
+  IArr := ['buy', 'sell', 'ForceUpdate', 'Cooldown', 'IsCooldownActive'];
+  IIArr := ['1', '1', 'false', 'false', 'false'];
+  For i := 0 to 2 do
+    For ii := 0 to 4 do
+      WriteINI(ToStr(i), IArr[ii], IIArr[ii], RemotePath);
+End;
+
+procedure form_init();
+Var
+  InfoInput : Integer;
+  B, W, H : LongInt;
+  ImgLoc : String;
+begin
+  {Create the form}
+  Form := TForm.Create(nil);
+  with Form do
+  begin
+    Width := 510;
+    Height := 300;
+    Caption := 'GEMerchant v0.1 - Remote Form';
+    Form.OnActivate := @LoadSettings;
+  end;
+
+  {Header Image Position}
+  HImage := TImage.Create(Form);
+  with HImage do
+  begin
+    Parent := Form;
+    Top := 5;
+    Left := 5;
+    Height := 75;
+    Width := 500;
+  end;
+
+  {Header Image}
+  ImgLoc := 'C:\Users\Daniel\Desktop\head.bmp';
+  B := LoadBitmap(ImgLoc);
+  GetBitmapSize(B, W, H);
+  DrawBitmap(B, HImage.CANVAS, 0, 0);
+  FreeBitmap(B);
+
+  {Status label}
+  StatusLabel := TLabel.Create(Form);
+  With StatusLabel do
+  Begin
+    Parent := Form;
+    Caption := 'Status: N/A' + FormStatus;
+    Top := 275;
+    Left := 10;
+  End;
+
+  {Label Fields}
+  For InfoLabel := 0 to High(LabelCap) do
+  Begin
+    SLabel[InfoLabel] := TLabel.Create(Form);
+    With SLabel[InfoLabel] do
+    Begin
+      Parent := Form;
+      Caption := LabelCap[InfoLabel];
+      Font.Color := clBlack;
+      Top := LabelTop[InfoLabel];
+      Left := LabelLeft[InfoLabel];
+    End;
+  End;
+
+  {Input Fields}
+  For InfoInput := 0 to High(InputCap) do
+  Begin
+    Input[InfoInput] := TEdit.Create(Form);
+    With Input[InfoInput] do
+    Begin
+      Parent := Form;
+      Caption := InputCap[InfoInput];
+      Top := InputTop[InfoInput];
+      Left := InputLeft[InfoInput];
+      Width := InputWidth[InfoInput];
+      Height := InputHeight[InfoInput];
+    End;
+  End;
+
+  {UpdatePrice Buttons}
+  Button0 := TButton.Create(Form);
+  With Button0 do
+  Begin
+    Parent := Form;
+    Caption := BtnCap[0];
+    Top := BtnTop[0];
+    Left := BtnLeft[0];
+    Width := BtnWidth[0];
+    OnClick := @Update0;
+  End;
+
+  Button1 := TButton.Create(Form);
+  With Button1 do
+  Begin
+    Parent := Form;
+    Caption := BtnCap[1];
+    Top := BtnTop[1];
+    Left := BtnLeft[1];
+    Width := BtnWidth[1];
+    OnClick := @Update1;
+  End;
+
+  Button2 := TButton.Create(Form);
+  With Button2 do
+  Begin
+    Parent := Form;
+    Caption := BtnCap[2];
+    Top := BtnTop[2];
+    Left := BtnLeft[2];
+    Width := BtnWidth[2];
+    OnClick := @Update2;
+  End;
+
+  {ForceUpdate Buttons}
+  FUpdate0 := TButton.Create(Form);
+  With FUpdate0 do
+  Begin
+    Parent := Form;
+    Caption := 'Force Update';
+    Top := BtnTop[3];
+    Left := BtnLeft[3];
+    Width := BtnWidth[3];
+    OnClick := @ForceUpdate0;
+    Font.Style := [fsItalic];
+  End;
+
+  FUpdate1 := TButton.Create(Form);
+  With FUpdate1 do
+  Begin
+    Parent := Form;
+    Caption := 'Force Update';
+    Top := BtnTop[4];
+    Left := BtnLeft[4];
+    Width := BtnWidth[4];
+    OnClick := @ForceUpdate1;
+    Font.Style := [fsItalic];
+  End;
+
+  FUpdate2 := TButton.Create(Form);
+  With FUpdate2 do
+  Begin
+    Parent := Form;
+    Caption := 'Force Update';
+    Top := BtnTop[5];
+    Left := BtnLeft[5];
+    Width := BtnWidth[5];
+    OnClick := @ForceUpdate2;
+    Font.Style := [fsItalic];
+  End;
+
+  FUpdate2 := TButton.Create(Form);
+  With FUpdate2 do
+  Begin
+    Parent := Form;
+    Caption := 'Force Update';
+    Top := BtnTop[5];
+    Left := BtnLeft[5];
+    Width := BtnWidth[5];
+    OnClick := @ForceUpdate2;
+    Font.Style := [fsItalic];
+  End;
+
+  {Cooldown buttons}
+  CDown0 := TButton.Create(Form);
+  With CDown0 do
+  Begin
+    Parent := Form;
+    Caption := 'Cooldown';
+    Top := BtnTop[6];
+    Left := BtnLeft[6];
+    Width := BtnWidth[6];
+    OnClick := @Cool0;
+    Font.Style := [fsItalic];
+  End;
+
+  CDown1 := TButton.Create(Form);
+  With CDown1 do
+  Begin
+    Parent := Form;
+    Caption := 'Cooldown';
+    Top := BtnTop[7];
+    Left := BtnLeft[7];
+    Width := BtnWidth[7];
+    OnClick := @Cool1;
+    Font.Style := [fsItalic];
+  End;
+
+  CDown2 := TButton.Create(Form);
+  With CDown2 do
+  Begin
+    Parent := Form;
+    Caption := 'Cooldown';
+    Top := BtnTop[8];
+    Left := BtnLeft[8];
+    Width := BtnWidth[8];
+    OnClick := @Cool2;
+    Font.Style := [fsItalic];
+  End;
+
+  {Refresh button}
+  UpdateForm := TButton.Create(Form);
+  With UpdateForm do
+  Begin
+    Parent := Form;
+    Caption := 'Refresh';
+    Top := BtnTop[9];
+    Left := BtnLeft[9];
+    Width := BtnWidth[9];
+    OnClick := @UpdateInfo;
+    Font.Style := [fsItalic];
+  End;
+
+  {Refresh button}
+  UpdateForm := TButton.Create(Form);
+  With UpdateForm do
+  Begin
+    Parent := Form;
+    Caption := 'Default';
+    Top := BtnTop[10];
+    Left := BtnLeft[10];
+    Width := BtnWidth[10];
+    OnClick := @DefaultSettings;
+    Font.Style := [fsItalic];
+  End;
+
+  Form.ShowModal;
+end;
+
+procedure callsafe(proc: string);
+var
+  V: TVariantArray;
+begin
+  ThreadSafeCall(Proc, V);
+end;
+
+procedure Form_SafeCall(Proc: string);
+var
+  v: TVariantArray;
+begin
+  SetLength(v, 0);
+  ThreadSafeCall(Proc, v);
+end;
+
+procedure form_free();
+begin
+  Form.Free;
+end;
+
+begin
+  ClearDebug();
+  DeclareVars;
+
+  try
+    Form_SafeCall('Form_Init');
+  except
+    Writeln(ExceptionToString(ExceptionType, ExceptionParam));
+  finally
+    Form_SafeCall('form_free');
+  end;
+end.

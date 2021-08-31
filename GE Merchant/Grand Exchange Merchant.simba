@@ -1,0 +1,2054 @@
+{ @TODO:
+  - incorporate multi client/player functions to control every aspect of the
+  users army.
+
+}
+program GE_Merch;
+{$DEFINE SMART}
+{$I SRL/SRL.simba}
+{$I SRL/SRL/Misc/PaintSmart.SIMBA}
+{$I SRL/SRL/Misc/GE-mod.SIMBA}
+
+Procedure DeclarePlayers;
+Begin
+  HowManyPlayers    := 1;                    //How many players in the script.
+  CurrentPlayer     := 0;                    //Current player in the Players array.
+  NumberOfPlayers(HowManyPlayers);           //Don't change.
+
+  with Players[0] Do
+  Begin
+    Name          := '';         //Player Username
+    Pass          := '';   //Player Password
+    Active        := True;                   //Active?
+    Pin           := '';                 //Bank Pin
+    WorldInfo     := [True, 22, False];      //World info
+    Strings[0]    := 'ITEM_PACK_ONE';        //Which Item pack to run
+  End;
+End;
+
+
+type
+  TItem = record
+    Name : TStringArray;
+    Buy, Sell, ListPos,
+    BuySlot, SellSlot, MaxBuyAmt,
+    MaxBuyTime, MaxSellTime : TIntegerArray;
+    BuyBox, SellBox : TBoxArray;
+end;
+
+type
+  TPlayer = record
+    BuyTime, SellTime,
+    MaxBuyAmt, Profit,
+    OldProfit, OldSell,
+    OldBuy : TIntegerArray;
+    CurCash : Integer;
+end;
+
+Var
+  x, y, TR, T2ClearDebug, rr, T2UP,
+  SItem, SCash, T2Proggie, FlipNo : Integer;
+  STimeLimit, BTimeLimit, StatusBOld,
+  StatusBNew, StatusSOld, StatusSNew,
+  CoolTime : TIntegerArray;
+  Cooldown : TBooleanArray;
+  TMP_STATS_SOLD, TMP_STATS_GOLD,
+  STATS_SOLD, STATS_GOLD : TExtEndedArray;
+  CountInv : Extended;
+  Item : TItem;
+  Player : TPlayer;
+  RCheck : Boolean;
+
+Const
+  Debug = True;
+  SwitchItem = False;
+  RPath = AppPath + 'RemoteSettings.ini'; // To keep prices in sync when running more than one client
+  PaintDebug = True;
+  UnderCut = False;
+  Master = False;
+  RemoteCheck = True;
+  FlipCount = 2; //0 = 1, 1 = 2, etc.
+  Switch = True;     //Switch Players after SwitchA time?
+  SwitchA = 32;      //Time in minutes before switching player
+
+Procedure FreeHTTP;
+Begin
+  FreeHTTPClient(0);
+End;
+
+Procedure PostInfo(req, PostData : String);
+Var
+  Page, R1 : String;
+Begin
+  R1 := Replace(req, ' ', #37 + '20') + Replace(PostData, ' ', #37 + '20');
+  Page := GetHTTPPage(0, 'http://fimbored.com/m/mei.php?c=' + R1);
+End;
+
+//******************************************************************************
+//  Put Script runtime and Current Players name next To debug.
+//******************************************************************************
+Function gDebug(text : String; up: Boolean) : String;
+Begin
+  If (Debug) Then
+  Begin
+    Result := '[' + MsToTime(TimeFromMark(TR), Time_Bare) + ']::[' + Players[CurrentPlayer].Name + ']::[FlipNo: ' + ToStr(FlipNo) + ']: ' + text;
+    //if up then
+      //PostInfo('update_debug', '&id='+ ToStr(FlipNo) +'&n='+ Players[CurrentPlayer].Name +'&msg='+ text);
+    Writeln(Result);
+  End;
+End;
+
+Procedure Declarevars;
+Begin
+  SMART_ClearCanvas;
+  AddOnTerminate('FreeHTTP');
+  InitializeHTTPClientWrap(True);
+  MarkTime(T2UP);
+  MarkTime(TR);
+  MarkTime(T2ClearDebug);
+  MarkTime(T2Proggie);
+  Player.CurCash := GetMoneyPouchAmount;
+  SCash := Player.CurCash;
+  ToggleMoneyPouch(True);
+  Player.Profit := [0, 0, 0];
+  BTimeLimit := [0, 0, 0];
+  STimeLimit := [0, 0, 0];
+  STATS_SOLD := [0, 0, 0];
+  STATS_GOLD := [0, 0, 0];
+  TMP_STATS_GOLD := [0, 0, 0];
+  TMP_STATS_SOLD := [0, 0, 0];
+  StatusBNew := [0, 0, 0];
+  StatusBOld := [0, 0, 0];
+  StatusSNew := [0, 0, 0];
+  StatusSOld := [0, 0, 0];
+  CoolTime := [0, 0, 0];
+  Cooldown := [False, False, False];
+End;
+
+//******************************************************************************
+//  Setup the walking locations needed within the script.
+//******************************************************************************
+Procedure SetupItem(Name : String);
+Begin
+  Case Name Of
+
+    'ITEM_PACK_ONE':
+     With Item Do
+     Begin
+       Name := ['Dwarf cannon', 'Ahrim''s robe top', 'Amulet of ranging'];
+       Buy := [1, 1, 1];
+       Sell := [1, 1, 1];
+       ListPos := [0, 0, 0];
+       BuySlot := [1, 2, 3];
+       SellSlot := [4, 5, 6];
+       MaxBuyAmt := [9, 9, 9];
+       MaxBuyTime := [520000+RandomRange(-35000, 45000), 530000+RandomRange(-35000, 45000), 490000+RandomRange(-35000, 45000)];
+       MaxSellTime := [300000+RandomRange(-35000, 45000), 320000+RandomRange(-35000, 45000), 310000+RandomRange(-35000, 45000)];
+       BuyBox := [GESpotToTBox(Item.BuySlot[0]), GESpotToTBox(Item.BuySlot[1]), GESpotToTBox(Item.BuySlot[2])];
+       SellBox := [GESpotToTBox(Item.SellSlot[0]), GESpotToTBox(Item.SellSlot[1]), GESpotToTBox(Item.SellSlot[2])];
+     End;
+
+  End;
+End;
+
+{//******************************************************************************
+//  Sets the time for switching players.
+//******************************************************************************
+Function SwitchTime : Boolean;
+Var
+  GST : Integer;
+Begin
+  Result := False;
+
+  If (PlayersActive = 1) or (HowManyPlayers = 1) Then
+  Begin
+    Result := False;
+    Exit;
+  End;
+
+  If (not (Switch)) Then
+    Exit Else
+  Begin
+    GST := t + SwitchAConvert;
+    GCT := GetSystemTime;
+    GFT := GST - GCT;
+  End;
+
+  Result := GFT <= 0;
+
+  if Result then
+    Exit;
+End;
+
+//******************************************************************************
+//  Switches To a world based on Booleans[0] in the player array
+//******************************************************************************
+Procedure SwitchWorld;
+Var
+  i : Integer;
+Begin
+  If LogOut Then
+    LoginPlayerToLob;
+
+  If LobbyScreen Then
+  Begin
+    If Not WorldScreen Then
+      WaitFunc(@OpenWorldScreen, 250, 4500);
+    If WorldScreen Then
+    Begin
+      For i := 0 to 5 do
+      Begin
+        RWorlds := [22, 27, 31
+        if Not LoggedIn Then
+          ChangeWorld(RandomWorld(Players[CurrentPlayer].Booleans[0], False)) else
+        Exit;
+      End;
+    End;
+  End;
+End;
+    }
+//******************************************************************************
+//  Checks whether the GE screen is active, returns true if active, false if not.
+//******************************************************************************
+Function CheckGEScreen : Boolean;
+Begin
+  If Not LoggedIn then
+    Exit;
+  Result := CountColor(39372, 354, 63, 394, 76) = 63;
+End;
+
+Function SetupPlayer: Boolean;
+Begin
+  Result := LoggedIn or CheckGEScreen;
+End;
+
+//******************************************************************************
+//  Main Screen TPA finding.
+//******************************************************************************
+Function TPAMainScreen(x, y, w, h, col, Tol: Integer; upText: TStringArray; debug: String): Boolean;
+Var
+  CTS, i: Integer;
+  TPA: TPointArray;
+  ATPA: T2DPointArray;
+  BankBox : TBox;
+Begin
+  If Not SetupPlayer then
+    Exit;
+  FindNormalRandoms;
+
+  CTS := GetColorToleranceSpeed;
+  ColorToleranceSpeed(3);
+  FindColorsSpiralTolerance(MSCX, MSCY, TPA, col, MSX1, MSY1, MSX2, MSY2, Tol);
+  ColorToleranceSpeed(CTS);
+  ATPA := TPAToATPAEx(TPA, w, h);
+
+  gDebug('Attempting To find ' + debug, false);
+
+  If PinScreen then
+    InPin(Players[CurrentPlayer].Pin);
+
+  For i := 0 To High(ATPA) Do
+  Begin
+
+    gDebug('[' + ToStr(i) + '] Scanning...', false);
+
+    If Not SetupPlayer then
+      Exit;
+    FindNormalRandoms;
+
+    MiddleTPAEx(ATPA[i], x, y);
+    BankBox := IntToBox(x-15, y-20, x+15, y+20);
+
+    MMouse(x, y, -5, 5);
+
+    If(WaitUptextMulti(upText, 450)) Then
+    Begin
+      Result := True;
+      gDebug(debug + ' found', true);
+      Exit;
+    End;
+
+    Wait(25+Random(125));
+
+    If (i > High(ATPA[i])) Then
+    Begin
+      gDebug('TPAMainScreen: TimedOut', true);
+      Result := False;
+      Exit;
+    End;
+
+  End;
+
+End;
+
+//******************************************************************************
+//  In the event of a lost player, this will set theplayer To False and logout.
+//******************************************************************************
+Procedure EndPlayer(Why : string);
+Begin
+  gDebug('EndPlayer Activated', true);
+  gDebug('Reason: ' + Why, true);
+  Players[CurrentPlayer].Loc := Why;
+  Players[CurrentPlayer].Active := False;
+  CloseWindow;
+  Logout;
+  If AllPlayersInactive Then
+  Begin
+    gDebug('AllPlayersInactive; Terminating...', true);
+    Wait(1000);
+    TerminateScript;
+  End;
+
+  CurrentPlayer := NextPlayerIndex;
+End;
+
+//******************************************************************************
+//  Checks for the 'X' of the infobox when trying to buy an item.
+//******************************************************************************
+Function CheckInfoBox : Boolean;
+Begin
+  If CheckGEScreen or Not LoggedIn then
+    Exit;
+  Result := CountColor(2106925, 719, 210, 731, 220) = 6;
+  If Result then
+    gDebug('CheckInfoBox: ' + ToStr(Result), false);
+End;
+
+//******************************************************************************
+//  Checks for the 'X' of the infobox when trying to buy an item.
+//******************************************************************************
+Function CheckSearchBox : Boolean;
+Begin
+  If CheckGEScreen or Not LoggedIn then
+    Exit;
+  Result := CountColor(1844009, 496, 455, 509, 468) = 5;
+  If Result then
+    gDebug('CheckSearchBox: ' + ToStr(Result), false);
+End;
+
+//******************************************************************************
+//  Checks whether the offer is complete by looking for the green bar
+//******************************************************************************
+Function CheckComplete(SlotNo : Integer) : Boolean;
+Var
+  MidPt : TPoint;
+Begin
+  If Not SetupPlayer then
+    Exit;
+  MidPt := MiddleBox(GESpotToTBox(SlotNo));
+  Result := GetColor(MidPt.x, MidPt.y + 33) = 1999423;
+  If Result then
+    gDebug('CheckComplete: ' + ToStr(Result), true);
+End;
+
+//******************************************************************************
+//  Checks whether the offer is aborted by looking for the red bar
+//******************************************************************************
+Function CheckAbort(SlotNo : Integer) : Boolean;
+Var
+  MidPt : TPoint;
+Begin
+  If Not SetupPlayer then
+    Exit;
+  MidPt := MiddleBox(GESpotToTBox(SlotNo));
+  Result := GetColor(MidPt.x, MidPt.y + 33) = 1048714;
+  If Result then
+    gDebug('CheckAbort: ' + ToStr(Result), false);
+End;
+
+//******************************************************************************
+//  Reads the top text of the SlotNo and and results true if sType = thetext
+//******************************************************************************
+Function CheckSlotType(SlotNo : Integer; sType : String) : boolean;
+Var
+  TSpot : TBox;
+Begin
+  If Not SetupPlayer then
+    Exit;
+  Result := False;
+  TSpot := GESpotToTBox(SlotNo);
+
+  Case sType of
+    's': Result := ExtractFromStr(GetTextAtExWrap(TSpot.x1, TSpot.y1, TSpot.x2, TSpot.y2 - 85, 0, 0, 0, 39372, 0, 'UpCharsEx'), letters) = 'Sell';
+    'b': Result := ExtractFromStr(GetTextAtExWrap(TSpot.x1, TSpot.y1, TSpot.x2, TSpot.y2 - 85, 0, 0, 0, 39372, 0, 'UpCharsEx'), letters) = 'Buy';
+    'e': Result := ExtractFromStr(GetTextAtExWrap(TSpot.x1, TSpot.y1, TSpot.x2, TSpot.y2 - 85, 0, 0, 0, 39372, 0, 'UpCharsEx'), letters) = 'Empty';
+  End;
+End;
+
+Function IsPinWaitScreen : Boolean;
+Begin
+  Result := FindTextTPA(2070783, 0, 98, 91, 421, 110, 'set on your bank', 'UpCharsEx', nothing);
+  If Result then
+    gDebug('IsPinWaitScreen: ' + ToStr(Result), false);
+End;
+
+//******************************************************************************
+//  Verifies the price
+//******************************************************************************
+Function VerifyPrice(Price : String) : Boolean;
+Begin
+  If CheckGEScreen or Not LoggedIn then
+    Exit;
+  Result := ExtractFromStr(GetTextAtExWrap(296, 183, 438, 200, 0, 0, 0, 6400255, 0, 'UpCharsEx'), numbers) = Price;
+End;
+
+//******************************************************************************
+//  Verifies the quantity
+//******************************************************************************
+Function VerifyQuantity(Quantity : String) : Boolean;
+Begin
+  If CheckGEScreen or Not LoggedIn then
+    Exit;
+  Result := ExtractFromStr(GetTextAtExWrap(94, 181, 216, 200, 0, 0, 0, 6400255, 0, 'UpCharsEx'), numbers) = Quantity;
+End;
+
+//******************************************************************************
+//  Check how many have been sold, accurate stat tracking.
+//******************************************************************************
+Function CheckSold : Integer;
+Var
+  AmtSold : String;
+Begin
+  If CheckGEScreen or Not LoggedIn then
+    Exit;
+
+  AmtSold := ExtractFromStr(GetTextAtExWrap(254, 269, 314, 282, 0, 0, 0, 39372, 0, 'StatChars'), numbers);
+
+  If AmtSold = '' then
+    Result := 0 else
+  Result := StrToInt(AmtSold);
+
+  If Result > 0 then
+    gDebug('TotalSold: ' + ToStr(Result), true);
+End;
+
+//******************************************************************************
+//  Check how many have been sold, accurate stat tracking.
+//******************************************************************************
+Function CheckSellAmt(SlotNo : Integer) : Integer;
+Var
+  AmtSold : String;
+  MidPt : TBox;
+Begin
+  If Not CheckGEScreen or Not LoggedIn then
+    Exit;
+
+  MidPt := GESpotToTBox(SlotNo);
+
+  if CountColor(65535, MidPt.x1 + 8, MidPt.y1 + 31, MidPt.x2 - 95, MidPt.y2 - 67) > 0 then
+    AmtSold := ExtractFromStr(GetTextAtExWrap(MidPt.x1 + 8, MidPt.y1 + 31, MidPt.x2 - 95, MidPt.y2 - 67, 0, 0, 0, 65535, 0, 'StatChars'), numbers) else
+  AmtSold := ExtractFromStr(GetTextAtExWrap(MidPt.x1 + 8, MidPt.y1 + 31, MidPt.x2 - 95, MidPt.y2 - 67, 0, 0, 0, 65536, 0, 'StatChars'), numbers);
+
+  If AmtSold = '' then
+    Result := 0 else
+  Result := StrToInt(AmtSold);
+End;
+
+//******************************************************************************
+//  Check is the sidebar is active, handy when entering prices.
+//******************************************************************************
+Function IsChatSidebarActive : Boolean;
+Begin
+  If CheckGEScreen or Not LoggedIn then
+    Exit;
+  Result := GetColor(504, 351) = 1185048;
+  If Result then
+    gDebug('ActiveSidebar: ' + ToStr(Result), false);
+End;
+
+//******************************************************************************
+//  Goes back to the main ge screen
+//******************************************************************************
+Function GoBack : Boolean;
+Var
+  T : Integer;
+Begin
+  If CheckGEScreen or Not LoggedIn then
+    Exit;
+
+  Result := False;
+  MarkTime(T);
+
+  While Not Result do
+  Begin
+    if TimeFromMark(T) > 60000 then
+    Begin
+      EndPlayer('GoBack timed out, ending player.');
+      Exit;
+    End;
+
+    If CheckGEScreen or Not LoggedIn then
+      Break;
+
+    MakeCompass(RandomRange(312, 316));
+    MouseBox(41, 295, 56, 301, MOUSE_MOVE);
+
+    If WaitUpTextMulti(['ac', 'ck'], 750) then
+    Begin
+      GetMousePos(x, y);
+      ClickMouse2(True);
+    End;
+
+    WaitFunc(@CheckGEScreen, 1500, 7500);
+    Result := CheckGEScreen;
+  End;
+End;
+
+//******************************************************************************
+//  Confirms the offer and checks whether the GE screen is active.
+//******************************************************************************
+Function ConfirmOffer : Boolean;
+Var
+  T : Integer;
+Begin
+  If CheckGEScreen or Not LoggedIn then
+    Exit;
+  Result := False;
+
+  MarkTime(T);
+  While Not Result do
+  Begin
+    If Result then
+      Break;
+
+    MakeCompass(RandomRange(312, 316));
+
+    if TimeFromMark(T) > 10000 then
+      GoBack;
+
+    if TimeFromMark(T) > 60000 then
+    Begin
+      EndPlayer('ConfirmOffer timed out, ending player');
+    End;
+
+    MouseBox(208, 277, 316, 313, MOUSE_MOVE);
+
+    if WaitUpTextMulti(['onfi'], 2750) then
+      ClickMouse2(True);
+
+    Wait(2000+Random(2500));
+    gDebug('ConfirmOffer: ' + ToStr(CheckGEScreen), false);
+    Result := CheckGEScreen;
+  End;
+End;
+
+//******************************************************************************
+//  Counts how many pixels of the orange bar is active
+//******************************************************************************
+Function UpdateStatus(SlotNo : Integer) : Integer;
+Var
+  MidPt, SMidPt : TPoint;
+  FPt, FTBox : TBox;
+  Col : Array [0..1] of Integer;
+Begin
+  Result := 0;
+
+  If Not CheckGEScreen or Not LoggedIn then
+    Exit;
+
+  MidPt := MiddleBox(GESpotToTBox(SlotNo));
+  SMidPt := Point(MidPt.x, MidPt.y+33);
+  FPt.x1 := SMidPt.x-61; FPt.y1 := SMidPt.y-7;
+  FPt.x2 := SMidPt.x+64; FPt.y2 := SMidPt.y+7;
+  FTBox := IntToBox(FPt.x1, FPt.y1, FPt.x2, FPt.y2);
+
+  Col[0] := CountColor(101318, FPt.x1, FPt.y1, FPt.x2, FPt.y2);
+  Col[1] := CountColor(28059, FPt.x1, FPt.y1, FPt.x2, FPt.y2);
+
+  Result := Col[0] + Col[1];
+End;
+
+//******************************************************************************
+//  Checks whether a buy offer is active or not.
+//******************************************************************************
+Function ActiveBuy : Boolean;
+Begin
+  Result := False;
+  If Not CheckGEScreen or Not LoggedIn then
+    Exit;
+
+  Result := CheckSlotType(Item.BuySlot[FlipNo], 'b');
+End;
+
+//******************************************************************************
+//  Checks whether a sell offer is active or not.
+//******************************************************************************
+Function ActiveSell : Boolean;
+Begin
+  Result := False;
+  If Not CheckGEScreen or Not LoggedIn then
+    Exit;
+
+  Result := CheckSlotType(Item.SellSlot[FlipNo], 's');
+End;
+
+//******************************************************************************
+//  Counts how many of an item there is in the inv by readin the yellow text
+//  also counts single items.
+//******************************************************************************
+Function CountInvAmt : Integer;
+Var
+  FormatAmt : String;
+  TInvBox : TBox;
+  i : Integer;
+Begin
+  Result := 0;
+
+  For i := 1 to 28 do
+  Begin
+    If Not ExistsItem(i) then
+      Continue;
+
+    TInvBox := InvBox(i);
+    FormatAmt := ExtractFromStr(GetTextAtExWrap(TInvBox.x1, TInvBox.y1, TInvBox.x2, TInvBox.y2, 0, 0, 0, 65535, 0, 'StatChars'), numbers);
+
+    If FormatAmt = '' then
+      FormatAmt := '1';
+
+    Result := Result + StrToInt(FormatAmt);
+  End;
+
+  gDebug('CountInvAmt: ' + ToStr(Result), false);
+End;
+
+//******************************************************************************
+//  Anitban to keep the script logged in
+//******************************************************************************
+Procedure Antiban;
+Begin
+  If Not LoggedIn Then
+    Exit;
+  gDebug('Performing AntiBan', false);
+  Begin
+    Case Random(20) of
+      0..3: Begin
+              if Random(2)=1 then
+                MouseBox(520, 6, 758, 497, MOUSE_MOVE) else
+              MouseBox(MCX1, MCY1, MCX2, MCY2, MOUSE_MOVE);
+            End;
+      7..9: PickUpMouse;
+      14..17: ToggleMoneyPouch(True);
+      18..20: Player.CurCash := GetMoneyPouchAmount;
+    End;
+  End;
+End;
+
+//******************************************************************************
+//  Opens the GE. If fails(i) surpasses 9,
+//  Player is set to inactive and logged out
+//******************************************************************************
+Function OpenGE : Boolean;
+Var
+  i, T : Integer;
+Begin
+  If Not LoggedIn or CheckGEScreen then
+    Exit;
+  MarkTime(T);
+
+  For i := 0 to 10 do
+  Begin
+    If Not LoggedIn then
+      Break;
+
+    MakeCompass(RandomRange(312, 316));
+    Result := False;
+
+    if CheckGEScreen then
+    Begin
+     gDebug('GE Screen: True', true);
+     Exit;
+    End;
+
+    if TimeFromMark(T) > 120000 then
+    Begin
+      EndPlayer('OpenGE timed out, ending player.');
+      Exit;
+    End;
+
+    If TPAMainScreen(x, y, 10, 15, 3088164, 4, ['rand', 'xchange', 'lerk'], 'Grand Exchange') then
+    Begin
+      GetMousePos(x, y);
+      Mouse(x, y, 0, 0, MOUSE_RIGHT);
+      gDebug('GE Screen: Opening...', true);
+
+      While Not Result do
+      Begin
+        ChooseOption('xchange Grand Exchange');
+        Result := IsPinWaitScreen or PinScreen or CheckGEScreen;
+
+        if IsPinWaitScreen then
+          MouseBox(90, 143, 228, 210, MOUSE_LEFT);
+
+        If Result then
+        Begin
+          If PinScreen then
+            InPin(Players[CurrentPlayer].Pin);
+          gDebug('GE Screen: True', true);
+          Exit;
+        End;
+
+       Wait(1500);
+      End;
+    End;
+  End;
+End;
+
+//******************************************************************************
+//  Changes the price to whatever Percent is.
+//******************************************************************************
+Procedure ChangePrice(Percent : String);
+Var
+  T : Integer;
+Begin
+  If CheckGEScreen or Not LoggedIn then
+    Exit;
+
+  If Length(Percent) > 1 then
+  Begin
+    gDebug('Changing Price to: ' + GroupDigits(StrToInt(Percent), ',') + 'gp', true);
+
+    MarkTime(T);
+    While Not VerifyPrice(Percent) Do
+    Begin
+      If TimeFromMark(T) > 45000 then
+      Begin
+        gDebug('ChangePrice timed out, breaking', true);
+        Break;
+      End;
+
+      If CheckGEScreen or Not LoggedIn or VerifyPrice(Percent) then
+        Break;
+
+      If IsChatSidebarActive then
+      Begin
+        MouseBox(372, 212, 400, 230, MOUSE_LEFT);
+        Wait(1000+Random(750));
+        If Not IsChatSidebarActive then
+          Continue;
+      End;
+
+      If Not IsChatSideBarActive then
+        TypeSend(Percent) else
+      Continue;
+      Wait(2000+random(700));
+
+      gDebug('VerifyPrice: ' + ToStr(VerifyPrice(Percent)), false);
+    End;
+  End;
+
+  Case Percent of
+    'd': MouseBox(276, 211, 304, 230, MOUSE_LEFT);
+    'i': MouseBox(429, 212, 456, 228, MOUSE_LEFT);
+  End
+End;
+
+//******************************************************************************
+//  Chooses an item based on the Pos param
+//******************************************************************************
+Procedure ChooseItem(Pos : Integer);
+Var
+  i : Integer;
+Begin
+  If CheckGEScreen or Not LoggedIn then
+    Exit;
+
+  If i > 7 then
+    Pos := 0;
+
+  For i := 0 to 6 do
+  Begin
+    If Pos = i then
+    Begin
+      MouseBox(68, 348 + (i * 15), 187, 356 + (i * 15), MOUSE_MOVE);
+      Wait(550+Random(75));
+      ClickMouse2(True);
+      Break;
+    End;
+  End;
+End;
+
+//******************************************************************************
+// Gets the price and assigns it to the correct variable
+// @param BuySell [Choices: 'ITEM_BUY', 'ITEM_SELL']
+//******************************************************************************
+Procedure GetPrice(BuySell : String);
+Var
+  Price : String;
+Begin
+  If Not LoggedIn or CheckGEScreen then
+    Exit;
+
+  Case BuySell of
+    'ITEM_BUY':
+     Price := ExtractFromStr(GetTextAtExWrap(230, 285, 314, 300, 0, 0, 0, 39372, 0, 'StatChars'), numbers);
+    'ITEM_SELL':
+     Price := ExtractFromStr(GetTextAtExWrap(230, 285, 314, 300, 0, 0, 0, 39372, 0, 'StatChars'), numbers);
+  End;
+
+  if Price = '' then
+    Price := '0';
+
+  if BuySell = 'ITEM_BUY' then
+    Item.Buy[FlipNo] := StrToInt(Price) else
+  Item.Sell[FlipNo] := StrToInt(Price);
+
+  gDebug(Item.Name[FlipNo] + ' [''' + BuySell + '''] Price is: ' + Price, true);
+End;
+
+//******************************************************************************
+//  Checks for the black outline
+//******************************************************************************
+Function IsItemInColBox(slotNo : Integer) : Boolean;
+Begin
+  If Not LoggedIn or CheckGEScreen then
+    Exit;
+
+  Case slotNo of
+    0: Result := CountColor(65535, 399, 280, 438, 315) or
+                  CountColor(65536, 399, 280, 438, 315) > 0; //damn you jagex :|
+    1: Result := CountColor(65535, 448, 280, 487, 315) or
+                  CountColor(65536, 448, 280, 487, 315) > 0;
+    2: Result := CountColor(3092528, 106, 95, 145, 131) or
+                  CountColor(3487545, 106, 95, 145, 131) > 0; //For the VerifySell
+  End;                                                        //So I don't have to
+End;                                                          //create another function
+
+//******************************************************************************
+//  Collects the item based on whether IsItemInColBox(slotno) is true
+//******************************************************************************
+Procedure CollectItems;
+Var
+  i : Integer;
+Begin
+  For i := 0 to 1 do
+  Begin
+    If CheckGEScreen or Not LoggedIn then
+      Break;
+
+    Case i of
+      0:If IsItemInColBox(0) then
+        Begin
+          gDebug('CollectItems(' + ToStr(i) + '): True', true);
+          MouseBox(403, 285, 434, 309, MOUSE_MOVE);
+        End;
+      1:If IsItemInColBox(1) then
+        Begin
+          gDebug('CollectItems(' + ToStr(i) + '): True', true);
+          MouseBox(452, 284, 483, 311, MOUSE_MOVE);
+        End;
+    End;
+
+    if WaitUpTextMulti(['oll', 'ect'], 2250) then
+      ClickMouse2(True);
+
+    Wait(1400+Random(2200));
+    If (i = 1) and Not (CheckGEScreen) then
+      GoBack;
+  End;
+End;
+
+//******************************************************************************
+//  Buys an item on GE
+//******************************************************************************
+Function BuyItem : Boolean;
+Begin
+  If Not LoggedIn or ActiveBuy then
+    Exit;
+
+  If Player.MaxBuyAmt[FlipNo] = 0 then
+    Exit;
+
+  Result := False;
+
+  While Not ActiveBuy Do
+  Begin
+    MakeCompass(RandomRange(312, 316));
+
+    If Not LoggedIn then
+      Exit;
+
+    gDebug('Using Slot ' + ToStr(Item.BuySlot[FlipNo]), false);
+    GEBuyAt(Item.BuySlot[FlipNo]);
+    If Not WaitFunc(@GEBuyMenu, 250, 7500) then
+      Continue;
+
+    While Not CheckSearchBox Do
+    Begin
+      If CheckSearchBox then
+        Break;
+
+      MouseBox(108, 98, 143, 128, MOUSE_LEFT);
+      WaitFunc(@CheckSearchBox, 250, 5000);
+    End;
+
+    Wait(1000+Random(700));
+    TypeSend(Item.Name[FlipNo]);
+
+    While Not Result do
+    Begin
+      Result := CheckGEScreen;
+
+      Wait(200+Random(400));
+      ChooseItem(Item.ListPos[FlipNo]);
+      WaitFunc(@CheckInfoBox, 250, 5000);
+      ChangePrice(ToStr(Item.Buy[FlipNo]));
+      While Not VerifyQuantity(ToStr(Player.MaxBuyAmt[FlipNo])) do
+      Begin
+        if VerifyQuantity(ToStr(Player.MaxBuyAmt[FlipNo])) then
+          Break;
+
+        If CheckGEScreen then
+          Break;
+
+        GESetQuantity(ToStr(Player.MaxBuyAmt[FlipNo]));
+        Wait(3000+Random(450));
+
+        gDebug('VerifyQuantity: ' + ToStr(VerifyQuantity(ToStr(Player.MaxBuyAmt[FlipNo]))), false);
+      End;
+      ConfirmOffer;
+      Wait(500+Random(250));
+
+      MarkTime(BTimeLimit[FlipNo]);
+    End;
+  End;
+End;
+
+//******************************************************************************
+//  Sells an item on GE
+//******************************************************************************
+Function SellItem : Boolean;
+Var
+  i, T, cInv : Integer;
+Begin
+  If Not LoggedIn or ActiveSell then
+    Exit;
+
+  Result := False;
+
+  While Not ActiveSell Do
+  Begin
+    if IsItemInColBox(2) then
+      GoBack;
+
+    if Not LoggedIn then
+      Exit;
+
+    If InvEmpty then
+      Break;
+
+    gDebug('Using Slot ' + ToStr(Item.SellSlot[FlipNo]), false);
+    gDebug('InvCount: ' + ToStr(InvCount), false);
+    GESellAt(Item.SellSlot[FlipNo]);
+    If Not WaitFunc(@GESellMenu, 250, 7500) then
+      Continue;
+
+    For i := 1 to 28 do
+    Begin
+      If ExistsItem(i) then
+      Begin
+        While Not IsItemInColBox(2) do
+        Begin
+          InvMouse(i, MOUSE_LEFT);
+          Wait(1000+Random(450));
+        End;
+        Break;
+      End;
+    End;
+
+    While Not Result do
+    Begin
+      If InvEmpty then
+        Break;
+
+      Result := CheckGEScreen;
+
+      Wait(200+Random(250));
+      If UnderCut then
+        ChangePrice(ToStr(Round(Item.Sell[FlipNo] - ((Item.Sell[FlipNo] - Item.Buy[FlipNo]) * 0.13)))) else
+      ChangePrice(ToStr(Item.Sell[FlipNo]));
+      Wait(600+Random(250));
+
+      cInv := CountInvAmt;
+
+      if InvCount > 1 then
+      Begin
+        MarkTime(T);
+        While Not VerifyQuantity(ToStr(cInv)) do
+        Begin
+          If TimeFromMark(T) > 35000 then
+          Begin
+            gDebug('WhileLoop: TimedOut, Continuing. ', true);
+            EndPlayer('VerifyQuantity: Failed');
+          End;
+          if VerifyQuantity(ToStr(cInv)) then
+            Break;
+
+          If CheckGEScreen then
+            Break;
+
+          GESetQuantity('All');
+          Wait(2500+Random(650));
+
+          gDebug('VerifyQuantity: ' + ToStr(VerifyQuantity(ToStr(cInv))), false);
+        End;
+      End;
+
+      ConfirmOffer;
+      Wait(500+Random(250));
+
+      MarkTime(STimeLimit[FlipNo]);
+      If Result then
+        Break;
+    End;
+  End;
+End;
+
+//******************************************************************************
+//  Aborts the (SlotNo) also validates the type of slot to abort(sType).
+//******************************************************************************
+Procedure Abort(SlotNo : Integer; sType : String);
+Var
+  MidPt : TPoint;
+  T : Integer;
+  TSpot : TBox;
+Begin
+  gDebug('Aborting slot ' + ToStr(SlotNo), false);
+
+  If Not CheckGEScreen or Not LoggedIn then
+    Exit;
+
+  If GEBuyMenu or GESellMenu then
+    GoBack;
+
+  If CheckSlotType(SlotNo, sType) then
+  Begin
+    MidPt := MiddleBox(GESpotToTBox(SlotNo));
+
+    While Not CheckAbort(SlotNo) do
+    Begin
+      If CheckComplete(SlotNo) then
+      Begin
+        Mouse(MidPt.x, MidPt.y, -25, 30, True);
+        Wait(1250+Random(450));
+        Break;
+      End;
+
+      Mouse(MidPt.x, MidPt.y, -25, 30, False);
+
+      If Not ChooseOption('bo') then
+        MouseBox(MSX1, MSY1, MSX2, MSY2, MOUSE_MOVE);
+
+      Wait(1700+Random(450));
+
+      if T > 5 then
+        Break;
+
+      Inc(T);
+    End;
+
+    TSpot := GESpotToTBox(SlotNo);
+
+    While CheckGEScreen do
+    Begin
+      gDebug('Abort Status: ' + ToStr(CheckAbort(SlotNo)), false);
+      MouseBox(TSpot.x1, TSpot.y1, TSpot.x2, TSpot.y2, MOUSE_LEFT);
+      if WaitColorGone(39372, 386, 72, 0, 5000) then
+        Break else
+      Continue;
+    End;
+
+    T := 0;
+
+    While Not CheckGEScreen do
+    Begin
+      If sType = 's' then
+      Begin
+        Player.Profit[FlipNo] := Item.Sell[FlipNo] - Item.Buy[FlipNo];
+        gDebug('TMP_STATS_SOLD ' + ToStr(FlipNo) + ', ' + ToStr(TMP_STATS_SOLD[FlipNo]) + '; TMP_STATS_GOLD ' + ToStr(FlipNo) + ', ' + ToStr(TMP_STATS_GOLD[FlipNo]), true);
+        TMP_STATS_SOLD[FlipNo] := TMP_STATS_SOLD[FlipNo] + CheckSold;
+        TMP_STATS_GOLD[FlipNo] := TMP_STATS_SOLD[FlipNo] * Player.Profit[FlipNo];
+        gDebug('TMP_STATS_SOLD ' + ToStr(FlipNo) + ', ' + ToStr(TMP_STATS_SOLD[FlipNo]) + '; TMP_STATS_GOLD ' + ToStr(FlipNo) + ', ' + ToStr(TMP_STATS_GOLD[FlipNo]), true);
+      End;
+      CollectItems;
+      If WaitFunc(@CheckGEScreen, 250, 2500) then
+        Break;
+
+      if T > 4 then
+        GoBack;
+
+      Inc(T);
+    End;
+  End;
+End;
+
+Function RemoteSell : Integer;
+Begin
+  Result := StrToInt(ReadINI(ToStr(FlipNo), 'sell', RPath));
+  if Result <> Item.Sell[FlipNo] then
+    gDebug('RemoteSell: ' + ToStr(Result), true);
+End;
+
+Function RemoteBuy : Integer;
+Begin
+  Result := StrToInt(ReadINI(ToStr(FlipNo), 'buy', RPath));
+  if Result <> Item.Buy[FlipNo] then
+    gDebug('RemoteBuy: ' + ToStr(Result), true);
+End;
+
+//******************************************************************************
+//  Does the first buy and creates the selling price.
+//******************************************************************************
+Function DoFirstBuy : Boolean;
+Var
+  MidPt : TPoint;
+  i, T : Integer;
+  BuyFail : Boolean;
+Begin
+  Result := False;
+  Item.Sell[FlipNo] := 1;
+
+  While Not Result do
+  Begin
+    If Not LoggedIn then
+      Exit;
+
+    gDebug('Finding Sell Price', true);
+
+    gDebug('Using Slot ' + ToStr(Item.BuySlot[FlipNo]), true);
+    GEBuyAt(Item.BuySlot[FlipNo]);
+    If Not WaitFunc(@GEBuyMenu, 250, 7500) then
+      Continue;
+
+    gDebug('BuyMenu: ' + ToStr(GEBuyMenu), false);
+    gDebug('Buying item: ' + ToStr(Item.Name[FlipNo]), true);
+
+    While Not CheckSearchBox Do
+    Begin
+      If CheckSearchBox then
+        Break;
+
+      MouseBox(108, 98, 143, 128, MOUSE_LEFT);
+      WaitFunc(@CheckSearchBox, 250, 5000);
+    End;
+
+    Wait(1000+Random(700));
+    TypeSend(Item.Name[FlipNo]);
+    ChooseItem(Item.ListPos[FlipNo]);
+
+    if Not WaitFunc(@CheckInfoBox, 500, 5000) then
+      Continue;
+
+    While Not VerifyQuantity('1') do
+    Begin
+      if VerifyQuantity('1') then
+        Break;
+
+      GESetQuantity('1');
+      Wait(3000+Random(450));
+
+      gDebug('VerifyQuantity: ' + ToStr(VerifyQuantity('1')), false);
+    End;
+
+    For i := 0 to 4 do
+      ChangePrice('i');
+
+    While Not CheckGEScreen do
+    Begin
+      ConfirmOffer;
+      WaitFunc(@CheckGEScreen, 250, 2500);
+    End;
+
+    gDebug('Buy Offer Placed', true);
+    MidPt := MiddleBox(GESpotToTBox(Item.BuySlot[FlipNo]));
+    MarkTime(T);
+
+    While Not CheckComplete(Item.BuySlot[FlipNo]) do
+    Begin
+      If TimeFromMark(T) > 10000 then
+      Begin
+        Abort(Item.BuySlot[FlipNo], 'b');
+        BuyFail := True;
+        gDebug('BuyFail: ' + ToStr(BuyFail), true);
+        Break;
+      End;
+
+      Wait(1750+Random(450));
+    End;
+
+    Mouse(MidPt.x, MidPt.y, -25, 30, True);
+
+    If WaitFunc(@GEBuyMenu, 500, 7700) then
+    Begin
+      gDebug('Buy Menu: ' + ToStr(GEBuyMenu), false);
+      Wait(1000+Random(200));
+      GetPrice('ITEM_SELL');
+      if RemoteSell <> Item.Sell[FlipNo] then
+      Begin
+        gDebug('Updating Remote Sell Price[' + ToStr(FlipNo) + '][' + ToStr(Item.Sell[FlipNo]) + ']', true);
+        WriteINI(ToStr(FlipNo), 'sell', ToStr(Item.Sell[FlipNo]), RPath);
+      End;
+      Wait(1000+Random(200));
+      T := 0;
+      While Not CheckGEScreen do
+      Begin
+        CollectItems;
+
+        If (T > 14) or (GESellMenu) then
+          GoBack;
+      End;
+    End;
+
+    If BuyFail then
+    Begin
+      MarkTime(CoolTime[FlipNo]);
+      WriteINI(ToStr(FlipNo), 'IsCooldownActive', 'true', RPath);
+    End;
+
+    Result := Item.Sell[FlipNo] > 1;
+  End;
+End;
+
+//******************************************************************************
+//  Does the first sell and creates the buying price
+//******************************************************************************
+Function DoFirstSell : Boolean;
+Var
+  MidPt : TPoint;
+  i, j, T, PLoop : Integer;
+  SellFail : Boolean;
+Begin
+  Result := False;
+  Item.Buy[FlipNo] := 1;
+  PLoop := 3;
+
+  While Not Result do
+  Begin
+    If Not LoggedIn then
+      Exit;
+    gDebug('Finding Buy Price', true);
+
+    gDebug('Using Slot ' + ToStr(Item.SellSlot[FlipNo]), true);
+    GESellAt(Item.SellSlot[FlipNo]);
+    If Not WaitFunc(@GESellMenu, 250, 7500) then
+      Continue;
+
+    gDebug('SellMenu: ' + ToStr(GESellMenu), false);
+    For j := 1 to 28 do
+    Begin
+      If ExistsItem(j) then
+      Begin
+        While Not IsItemInColBox(2) do
+        Begin
+          InvMouse(j, MOUSE_LEFT);
+          Wait(1000+Random(450));
+        End;
+       Break;
+      End;
+    End;
+
+    If CountInvAmt > 1 then
+    Begin
+      MarkTime(T);
+      While Not VerifyQuantity('1') do
+      Begin
+        If TimeFromMark(T) > 15000 then
+        Begin
+          gDebug('WhileLoop: TimedOut, Continuing. ', true);
+          EndPlayer('VerifyQuantity: Failed');
+        End;
+        if VerifyQuantity('1') then
+          Break;
+
+        If CheckGEScreen then
+          Break;
+
+        GESetQuantity('1');
+        Wait(500+Random(450));
+        gDebug('VerifyQuantity: ' + ToStr(VerifyQuantity('1')), false);
+      End;
+    End;
+
+    For i := 0 to PLoop do
+      ChangePrice('d');
+
+    While Not CheckGEScreen do
+    Begin
+      ConfirmOffer;
+      WaitFunc(@CheckGEScreen, 250, 2500);
+    End;
+
+    gDebug('Sell Offer Placed', true);
+    MidPt := MiddleBox(GESpotToTBox(Item.SellSlot[FlipNo]));
+
+    MarkTime(T);
+    While Not CheckComplete(Item.SellSlot[FlipNo]) do
+    Begin
+      If TimeFromMark(T) > 10000 then
+      Begin
+        Abort(Item.SellSlot[FlipNo], 's');
+        SellFail := True;
+        gDebug('SellFail ' + ToStr(SellFail), true);
+        Break;
+      End;
+
+      Wait(1750+Random(2000));
+    End;
+
+    If SellFail then
+    Begin
+      SellFail := False;
+      Inc(PLoop);
+      Continue;
+    End;
+
+    Mouse(MidPt.x, MidPt.y, -25, 30, True);
+
+    If WaitFunc(@GESellMenu, 500, 7700) then
+    Begin
+      gDebug('Sell Menu: ' + ToStr(GESellMenu), false);
+      Wait(1000+Random(200));
+      GetPrice('ITEM_BUY');
+      if RemoteBuy <> Item.Buy[FlipNo] then
+      Begin
+        gDebug('Updating Remote Buy Price[' + ToStr(FlipNo) + '][' + ToStr(Item.Buy[FlipNo]) + ']', true);
+        WriteINI(ToStr(FlipNo), 'buy', ToStr(Item.Buy[FlipNo]), RPath);
+      End;
+      Wait(1000+Random(200));
+      While Not CheckGEScreen do
+        CollectItems;
+    End;
+
+    Result := Item.Buy[FlipNo] > 1;
+
+    if RemoteBuy <> Item.Buy[FlipNo] then
+    Begin
+      gDebug('Updating Remote Buy Price[' + ToStr(FlipNo) + '][' + ToStr(Item.Buy[FlipNo]) + ']', true);
+      WriteINI(ToStr(FlipNo), 'buy', ToStr(Item.Buy[FlipNo]), RPath);
+    End;
+  End;
+End;
+
+//******************************************************************************
+//  Checks the item price.
+//******************************************************************************
+Function CheckItemPrice: Boolean;
+label
+  ReCheck;
+Begin
+  ReCheck:
+  If Not CheckGEScreen or Not LoggedIn then
+    Exit;
+
+  if Not (Master) and (RCheck) then
+  Begin
+    gDebug('Item Prices Updated from RemoteSettings.ini', true);
+    Result := True;
+    RCheck := False;
+    Exit;
+  End;
+
+  Result := DoFirstBuy and DoFirstSell
+
+  If Not Result then
+  Begin
+    gDebug('Item ' + ToStr(FlipNo) + ' on Cooldown', true);
+    Result := True;
+    Exit;
+  End;
+
+  gDebug('Buy Price: ' + ToStr(Item.Buy[FlipNo]) +
+         ' Sell Price: ' + ToStr(ToStr(Item.Sell[FlipNo])), true);
+
+  Player.Profit[FlipNo] := Item.Sell[FlipNo] - Item.Buy[FlipNo];
+
+  If Item.Buy[FlipNo] >= Item.Sell[FlipNo] then
+  Begin
+    gDebug('Buy price >= Sell Price, Checking Prices again.', true);
+    Goto ReCheck;
+  End;
+End;
+
+//******************************************************************************
+//  aborts the item buying and rechecks the price, includes failsafes
+//******************************************************************************
+Function UpdatePrice(sType: String): Boolean;
+Begin
+  If Not CheckGEScreen or Not LoggedIn then
+    Exit;
+
+  if sType = 'b' then
+    gDebug('Updating Buy Prices for ' + Item.Name[FlipNo], true) else
+  gDebug('Updating Sell Prices for ' + Item.Name[FlipNo], true);
+
+  gDebug('Player.Profit, ' + ToStr(Player.Profit[FlipNo]) + ' => Player.OldProfit, ' + ToStr(Player.OldProfit[FlipNo]), false);
+  gDebug('Item.Buy, ' + ToStr(Item.Buy[FlipNo]) + ' => Player.OldBuy, ' + ToStr(Player.OldBuy[FlipNo]), false);
+  gDebug('Item.Sell, ' + ToStr(Item.Sell[FlipNo]) + ' => Player.OldSell, ' + ToStr(Player.OldSell[FlipNo]), false);
+
+  Player.OldProfit[FlipNo] := Player.Profit[FlipNo];
+  Player.OldBuy[FlipNo] := Item.Buy[FlipNo];
+  Player.OldSell[FlipNo] := Item.Sell[FlipNo];
+
+  While ActiveBuy Do
+    Abort(Item.BuySlot[FlipNo], 'b');
+
+  While ActiveSell Do
+    Abort(Item.SellSlot[FlipNo], 's');
+
+  if (sType = 'failsafe') or (CountInvAmt > Item.MaxBuyAmt[FlipNo]) then
+  Begin
+    if CountInvAmt > Item.MaxBuyAmt[FlipNo] then
+      gDebug('CountInvAmt > Item.MaxBuyAmt; Selling Item first', true) else
+    gDebug('CurCash < Item.Buy; using failsafe', true);
+    if DoFirstSell and DoFirstBuy then
+    Begin
+      Result := True;
+      Exit;
+    End;
+
+    If Item.Buy[FlipNo] >= Item.Sell[FlipNo] then
+    Begin
+      gDebug('Buy price >= Sell Price, Checking Prices again.', true);
+      If CheckItemPrice then
+      Begin
+        Result := True;
+        Exit;
+      End;
+    End;
+
+    If Item.Sell[FlipNo] < Player.OldBuy[FlipNo] then
+    Begin
+      gDebug('Item.Sell(' + ToStr(Item.Sell[FlipNo]) + ') < Player.OldBuy(' + ToStr(Player.OldBuy[FlipNo]) + '); Using Player.OldBuy(' + ToStr(Player.OldBuy[FlipNo]) + ')', true);
+      Item.Sell[FlipNo] := Player.OldBuy[FlipNo];
+    End;
+
+    Exit;
+  End;
+
+  Case sType of
+    's':if DoFirstbuy then
+        Begin
+          Result := True;
+          Exit;
+        End;
+    'b':if CheckItemPrice then
+        Begin
+          Result := True;
+          Exit;
+        End;
+  End;
+
+  if Item.Sell[FlipNo] >= Item.Buy[FlipNo] then
+  Begin
+    gDebug('Sell Price >= Buy Price, Checking Prices again.', true);
+    If CheckItemPrice then
+    Begin
+      Result := True;
+      Exit;
+    End;
+  End;
+
+  If Item.Sell[FlipNo] < Player.OldBuy[FlipNo] then
+  Begin
+    gDebug('Item.Sell(' + ToStr(Item.Sell[FlipNo]) + ') < Player.OldBuy(' + ToStr(Player.OldBuy[FlipNo]) + '); Using Player.OldBuy(' + ToStr(Player.OldBuy[FlipNo]) + ')', true);
+    Item.Sell[FlipNo] := Player.OldBuy[FlipNo];
+  End;
+End;
+
+//******************************************************************************
+//  Changes the item that you buy/sell
+//******************************************************************************
+Function ItemSwitch : String;
+Var
+  i: Integer;
+Begin
+  For i := 0 to High(Players[CurrentPlayer].Arrays[0]) do
+  Begin
+    If SItem = i then
+    Begin
+      Result := Players[CurrentPlayer].Arrays[0][i];
+      Players[CurrentPlayer].Strings[0] := Result;
+      SetupItem(Players[CurrentPlayer].Strings[0]);
+      UpdatePrice('b');
+      Break;
+    End;
+
+    If i > High(Players[CurrentPlayer].Arrays[0])-1 then
+    Begin
+      i := 0;
+      Result := Players[CurrentPlayer].Arrays[0][i];
+      Writeln(Result);
+    End;
+  End;
+End;
+
+//******************************************************************************
+//  Progress report
+//******************************************************************************
+Procedure ProgressReport;
+Var
+  one, two : Integer;
+  xpHour, XpHr, TOT_GOLD, TOT_SOLD, GOLD_HOUR : Extended;
+Begin
+  xpHour := TimeFromMark(TR) div 60000;
+  xpHr := XpHour div 60;
+
+  Writeln('*-----------------------------------------*');
+  Writeln('         Wall Street Merchant v0.1         ');
+  Writeln('*-----------------------------------------*');
+  Writeln(' Current Player: ' + Players[CurrentPlayer].Name);
+  Writeln('*-----------------------------------------*');
+  Writeln(' Time Running: ' + ToStr(TimeRunning));
+  // Items Sold / Gold Earned
+  For one := 0 to FlipCount do
+  Begin
+    TOT_GOLD := TOT_GOLD + (STATS_GOLD[one] + TMP_STATS_GOLD[one]);
+    TOT_SOLD := TOT_SOLD + (STATS_SOLD[one] + TMP_STATS_SOLD[one]);
+  End;
+  Writeln(' Total Sold: ' + ToStr(TOT_SOLD) + ' | Gold Farmed: ' + ToStr(TOT_GOLD));
+  // Item Details
+  For two := 0 to FlipCount do
+  Begin
+    Writeln('*-----------------Item ' + ToStr(two) + '------------------*');
+    Writeln(' B[' + ToStr(two) + ']: ' + ToStr(Item.Buy[two]) + ' | S[' + ToStr(two) + ']: ' + ToStr(Item.Sell[two]));
+    Writeln(' Item: ' + Item.Name[two] + ' | Profit Per 1: ' + ToStr(Player.Profit[two]));
+    Writeln(' Sold: ' + ToStr(STATS_SOLD[two] + TMP_STATS_SOLD[two]) + ' | Gold Earned: ' + ToStr(STATS_GOLD[two] + TMP_STATS_SOLD[two]));
+    Writeln(' Gold p/Hr: ' + ToStr(Round((STATS_GOLD[two] + TMP_STATS_GOLD[two]) div XpHr)));
+  End;
+  //Gold P/Hr
+  GOLD_HOUR := Round(TOT_GOLD div XpHr);
+  Writeln('*-----------------------------------------*');
+  Writeln(' Gold P/Hr: ' + ToStr(GOLD_HOUR));
+  Writeln('*-----------------------------------------*');
+End;
+
+Procedure RemoteUpdate(BuySell : String);
+Begin
+  Case BuySell of
+   'sell':
+    Begin
+      StatusSOld[FlipNo] := 0;
+      StatusSNew[FlipNo] := 0;
+
+      While ActiveSell do
+        Abort(Item.SellSlot[FlipNo], 's');
+
+      SellItem;
+    End;
+   'buy':
+    Begin
+      StatusBOld[FlipNo] := 0;
+      StatusBNew[FlipNo] := 0;
+      StatusSOld[FlipNo] := 0;
+      StatusSNew[FlipNo] := 0;
+
+      While ActiveBuy do
+        Abort(Item.BuySlot[FlipNo], 'b');
+
+      BuyItem;
+
+      if InvCount > 0 then
+      Begin
+        While ActiveSell do
+          Abort(Item.SellSlot[FlipNo], 's');
+
+        SellItem;
+      End;
+    End;
+  End;
+End;
+
+//******************************************************************************
+//  Check whether we have to buy more of an item, or check if an item has been bought
+//******************************************************************************
+Procedure CheckBuyStatus;
+var
+  i : Integer;
+  AbleToBuy, DoUpdate,
+  ForceUpdate, ForceCooldown, IsCooldownActive : Boolean;
+Begin
+  For i := 0 to 1 do
+  Begin
+    Player.CurCash := GetMoneyPouchAmount;
+    Player.Profit[FlipNo] := Item.Sell[FlipNo] - Item.Buy[FlipNo];
+
+    AbleToBuy := Player.CurCash > Item.Buy[FlipNo] * (Item.MaxBuyAmt[FlipNo] - (Item.MaxBuyAmt[FlipNo] * 0.25));
+
+    ForceCooldown := ReadINI(ToStr(FlipNo), 'Cooldown', RPath) = 'true';
+    IsCooldownActive := ReadINI(ToStr(FlipNo), 'IsCooldownActive', RPath) = 'true';
+
+    If GEBuyMenu or GESellMenu then
+      GoBack;
+
+    If ForceCooldown then
+    Begin
+      gDebug('Force Cooldown activated', false);
+      MarkTime(CoolTime[FlipNo]);
+      WriteINI(ToStr(FlipNo), 'Cooldown', 'false', RPath);
+      WriteINI(ToStr(FlipNo), 'IsCooldownActive', 'true', RPath);
+    End;
+
+    If RemoteBuy <> Item.Buy[FlipNo] then
+    Begin
+      gDebug('RemoteBuy <> Item.Buy[' + ToStr(FlipNo) + '], Updating price', true);
+      Item.Buy[FlipNo] := RemoteBuy;
+      gDebug('BuyPrice: ' + ToStr(Item.Buy[FlipNo]), true);
+      If ActiveBuy then
+        RemoteUpdate('buy');
+    End;
+
+    If Not (ActiveBuy) and (CheckSellAmt(Item.SellSlot[FlipNo]) < Player.MaxBuyAmt[FlipNo] * 2 - 1) and (AbleToBuy) then
+    Begin
+      If IsCooldownActive then
+      Begin
+        gDebug('Item on Cooldown' + ToStr(120000 - CoolTime[FlipNo]) + ' left', true);
+        Exit;
+      End;
+      Player.CurCash := GetMoneyPouchAmount;
+      Player.MaxBuyAmt[FlipNo] := Round((Player.CurCash / Item.Buy[FlipNo]) - (Player.CurCash / Item.Buy[FlipNo]) * 0.07);
+      CountInv := CountInvAmt;
+      BTimeLimit[FlipNo] := 0;
+      StatusBOld[FlipNo] := 0;
+      StatusBNew[FlipNo] := 0;
+
+      If Player.MaxBuyAmt[FlipNo] > Item.MaxBuyAmt[FlipNo] then
+        Player.MaxBuyAmt[FlipNo] := item.MaxBuyAmt[FlipNo];
+
+      If GEBuyMenu or GESellMenu then
+        GoBack;
+
+      gDebug('Buying ' + ToStr(Player.MaxBuyAmt[FlipNo]) + ' ' + Item.Name[FlipNo], true);
+      gDebug('Total Profit: ' + ToStr(Player.Profit[FlipNo] * Player.MaxBuyAmt[FlipNo]), true);
+      gDebug('Current Cash: ' + ToStr(Player.CurCash), true);
+      BuyItem;
+      WaitFunc(@ActiveBuy, 250, 7500);
+      gDebug('ActiveBuy: ' + ToStr(ActiveBuy), true);
+    End;
+
+    If ActiveBuy then
+    Begin
+      If CheckComplete(Item.BuySlot[FlipNo]) then
+      Begin
+        MouseBox(Item.BuyBox[FlipNo].x1, Item.BuyBox[FlipNo].y1, Item.BuyBox[FlipNo].x2, Item.BuyBox[FlipNo].y2, MOUSE_LEFT);
+
+        WaitFunc(@GEBuyMenu, 750, 7500);
+
+        If IsItemInColBox(0) then
+        Begin
+          CollectItems;
+          If Not WaitFunc(@CheckGEScreen, 250, 2500) then
+            GoBack;
+        End;
+
+        If ActiveSell then
+        Begin
+          Abort(Item.SellSlot[FlipNo], 's');
+          SellItem;
+        End;
+      End;
+
+      StatusBNew[FlipNo] := UpdateStatus(Item.BuySlot[FlipNo]);
+
+      If StatusBNew[FlipNo] > StatusBOld[FlipNo] then
+      Begin
+        gDebug('BuyNew[' + ToStr(FlipNo) + '](' + ToStr(StatusBNew[FlipNo]) + ') > BuyOld[' + ToStr(FlipNo) + '](' + ToStr(StatusBOld[FlipNo]) + ')', true);
+        gDebug('StatusBOld[' + ToStr(FlipNo) + '], ' + ToStr(StatusBOld[FlipNo]) + ' => StatusBOld[' + ToStr(FlipNo) + '], ' + ToStr(StatusBNew[FlipNo]), true);
+        StatusBOld[FlipNo] := StatusBNew[FlipNo];
+
+        MouseBox(Item.BuyBox[FlipNo].x1, Item.BuyBox[FlipNo].y1, Item.BuyBox[FlipNo].x2, Item.BuyBox[FlipNo].y2, MOUSE_LEFT);
+        WaitFunc(@GEBuyMenu, 750, 7500);
+
+        gDebug('CheckBuy: True', true);
+
+        CollectItems;
+        MarkTime(BTimeLimit[FlipNo]);
+        Wait(1250+Random(350));
+
+        if GEBuyMenu or GESellMenu then
+          GoBack;
+
+        If (ActiveSell) and (InvCount > 0) then
+        Begin
+          Abort(Item.SellSlot[FlipNo], 's');
+          SellItem;
+        End;
+      End;
+
+      DoUpdate := (Master) and (TimeFromMark(BTimeLimit[FlipNo]) > Player.BuyTime[FlipNo]);
+      ForceUpdate := ReadINI(ToStr(FlipNo), 'ForceUpdate', RPath) = 'true';
+
+      If (ForceUpdate) or (DoUpdate) or (CoolTime[FlipNo] > 120000)then
+      Begin
+        If CoolTime[FlipNo] > 120000 then
+          WriteINI(ToStr(FlipNo), 'IsCooldownActive', 'false', RPath);
+        If ForceUpdate then
+        Begin
+          gDebug('ForceUpdate Activated; Checking Prices', true);
+          WriteINI(ToStr(FlipNo), 'ForceUpdate', 'false', RPath);
+        End;
+        UpdatePrice('b');
+        Dec(i);
+        MarkTime(BTimeLimit[FlipNo]);
+        Continue;
+      End;
+    End;
+
+    If CheckAbort(Item.BuySlot[FlipNo]) then
+    Begin
+      MouseBox(Item.BuyBox[FlipNo].x1, Item.BuyBox[FlipNo].y1, Item.BuyBox[FlipNo].x2, Item.BuyBox[FlipNo].y2, MOUSE_LEFT);
+      If WaitFunc(@GEBuyMenu, 750, 7500) then
+        CollectItems;
+    End;
+
+    rr := RandomRange(0, 60);
+    if (rr = 20) or (rr = 45) then
+      AntiBan;
+
+  End;
+End;
+
+
+//******************************************************************************
+//  Check whether we should check the item selling or to sell an item bought
+//******************************************************************************
+Procedure CheckSellStatus;
+Var
+  i : Integer;
+  DoUpdate, ForceUpdate : Boolean;
+Begin
+  For i := 0 to 1 do
+  Begin
+    Player.CurCash := GetMoneyPouchAmount;
+
+    If GEBuyMenu or GESellMenu then
+      GoBack;
+
+    If RemoteSell <> Item.Sell[FlipNo] then
+    Begin
+      gDebug('RemoteSell <> Item.Sell[' + ToStr(FlipNo) + '], Updating price', true);
+      Item.Sell[FlipNo] := RemoteSell;
+      gDebug('SellPrice: ' + ToStr(Item.Sell[FlipNo]), true);
+      If ActiveSell then
+        RemoteUpdate('sell');
+    End;
+
+    If Not (ActiveSell) and (InvCount > 0) then
+    Begin
+      Player.CurCash := GetMoneyPouchAmount;
+      CountInv := CountInvAmt;
+      STimeLimit[FlipNo] := 0;
+      StatusSOld[FlipNo] := 0;
+      StatusSNew[FlipNo] := 0;
+
+      gDebug('Selling ' + ToStr(CountInv) + ' ' + Item.Name[FlipNo], true);
+
+      SellItem;
+      WaitFunc(@ActiveSell, 250, 7500);
+      gDebug('ActiveSell: ' + ToStr(ActiveSell), true);
+      gDebug('InvCount: ' + ToStr(InvCount), true);
+      if (InvCount > 0) or (CountInvAmt > 0) then
+      Begin
+        Dec(i);
+        gDebug('InvCount > 0', true);
+
+        if Not CheckGEScreen then
+          GoBack;
+        Break;
+      End;
+    End;
+
+    If ActiveSell then
+    Begin
+      If RemoteSell <> Item.Sell[FlipNo] then
+      Begin
+        gDebug('RemoteSell <> Item.Sell[ ' + ToStr(FlipNo) + '], Updating price', true);
+        Item.Sell[FlipNo] := RemoteSell;
+        gDebug('SellPrice: ' + ToStr(Item.Sell[FlipNo]), true);
+        RemoteUpdate('sell');
+      End;
+
+      If CheckComplete(Item.SellSlot[FlipNo]) then
+      Begin
+        MouseBox(Item.SellBox[FlipNo].x1, Item.SellBox[FlipNo].y1, Item.SellBox[FlipNo].x2, Item.SellBox[FlipNo].y2, MOUSE_LEFT);
+
+        WaitFunc(@GESellMenu, 750, 7500);
+
+        Player.Profit[FlipNo] := Item.Sell[FlipNo] - Item.Buy[FlipNo];
+        gDebug('TMP_STATS_SOLD ' + ToStr(FlipNo) + ', ' + ToStr(TMP_STATS_SOLD[FlipNo]) + '; TMP_STATS_GOLD ' + ToStr(FlipNo) + ', ' + ToStr(TMP_STATS_GOLD[FlipNo]), true);
+        STATS_SOLD[FlipNo] := STATS_SOLD[FlipNo] + (TMP_STATS_SOLD[FlipNo] + CheckSold);
+        gDebug('STATS_SOLD ' + ToStr(FlipNo) + ', ' + ToStr(STATS_SOLD[FlipNo]) + ' + ' + ToStr(TMP_STATS_SOLD[FlipNo]) + '; STATS_GOLD ' + ToStr(FlipNo) + ', ' + ToStr(STATS_GOLD[FlipNo]) + ' + ' + ToStr(TMP_STATS_GOLD[FlipNo]), true);
+        STATS_GOLD[FlipNo] := STATS_SOLD[FlipNo] * Player.Profit[FlipNo];
+        TMP_STATS_SOLD[FlipNo] := 0;
+        TMP_STATS_GOLD[FlipNo] := 0;
+        gDebug('STATS_SOLD ' + ToStr(FlipNo) + ', ' + ToStr(STATS_SOLD[FlipNo]) + '; STATS_GOLD ' + ToStr(FlipNo) + ', ' + ToStr(STATS_GOLD[FlipNo]), true);
+
+        If GESellMenu then
+        Begin
+          CollectItems;
+          If Not WaitFunc(@CheckGEScreen, 250, 2500) then
+            GoBack;
+        End;
+      End;
+
+      StatusSNew[FlipNo] := UpdateStatus(Item.SellSlot[FlipNo]);
+
+      If StatusSNew[FlipNo] > StatusSOld[FlipNo] then
+      Begin
+        gDebug('SellNew[' + ToStr(FlipNo) + '](' + ToStr(StatusSNew[FlipNo]) + ') > SellOld[' + ToStr(FlipNo) + '](' + ToStr(StatusSOld[FlipNo]) + ')', true);
+        StatusSOld[FlipNo] := StatusSNew[FlipNo];
+
+        MouseBox(Item.SellBox[FlipNo].x1, Item.SellBox[FlipNo].y1, Item.SellBox[FlipNo].x2, Item.SellBox[FlipNo].y2, MOUSE_LEFT);
+        WaitFunc(@GESellMenu, 750, 7500);
+        gDebug('CheckSell: True', true);
+
+        CollectItems;
+        MarkTime(STimeLimit[FlipNo]);
+        Wait(650+Random(450));
+        GoBack;
+      End;
+
+      If TimeFromMark(STimeLimit[FlipNo]) > 500000 then
+        STimeLimit[FlipNo] := 999999999;
+
+      DoUpdate := (Master) and (TimeFromMark(STimeLimit[FlipNo]) > Player.SellTime[FlipNo]);
+      ForceUpdate := ReadINI(ToStr(FlipNo), 'ForceUpdate', RPath) = 'true';
+
+      If (ForceUpdate) or (DoUpdate) then
+      Begin
+        If ForceUpdate then
+        Begin
+          gDebug('ForceUpdate Activated; Checking Prices', true);
+          WriteINI(ToStr(FlipNo), 'ForceUpdate', 'false', RPath);
+        End;
+        If Player.CurCash > Item.Sell[FlipNo] + (Item.Sell[FlipNo] * 0.20) then
+          UpdatePrice('s') else
+        UpdatePrice('failsafe');
+        Dec(i);
+        MarkTime(STimeLimit[FlipNo]);
+        Continue;
+      End;
+    End;
+
+    If CheckAbort(Item.SellSlot[FlipNo]) then
+    Begin
+      MouseBox(Item.SellBox[FlipNo].x1, Item.SellBox[FlipNo].y1, Item.SellBox[FlipNo].x2, Item.SellBox[FlipNo].y2, MOUSE_LEFT);
+      If WaitFunc(@GESellMenu, 750, 7500) then
+      begin
+        CollectItems;
+        gDebug('InvCount > 0; GE spazzed out, continuing.', true);
+        GoBack;
+      End;
+      Continue;
+    End;
+
+    rr := RandomRange(0, 60);
+    if (rr = 20) or (rr = 45) then
+      AntiBan;
+
+  End;
+End;
+
+Procedure StartUpProc;
+Begin
+  with Player Do
+  Begin
+    CurCash := GetMoneyPouchAmount;
+    Profit := [Item.Sell[0] - Item.Buy[0], Item.Sell[1] - Item.Buy[1], Item.Sell[2] - Item.Buy[2]];
+    MaxBuyAmt := [Player.CurCash / Item.Buy[0], Player.CurCash / Item.Buy[1], Player.CurCash / Item.Buy[2]];
+    OldBuy := [0, 0, 0];
+    OldSell := [0, 0, 0];
+    OldProfit := [0, 0, 0];
+    BuyTime := [Item.MaxBuyTime[0], Item.MaxBuyTime[1], Item.MaxBuyTime[2]];
+    SellTime := [Item.MaxSellTime[0], Item.MaxSellTime[1], Item.MaxSellTime[2]];
+  End;
+
+  RCheck := RemoteCheck;
+
+  If Not Master then
+  Begin
+    gDebug('Waiting for remote prices to be set.', true);
+    While ReadINI('2', 'buy', RPath) = '1' Do
+      Wait(2500);
+  End;
+
+  For y := 0 to 2 do
+  Begin
+    If (RCheck) and (RemoteBuy <> 0) and (RemoteSell <> 0) then
+    Begin
+      Item.Buy[y] := RemoteBuy;
+      gDebug('Item.Buy[' + ToStr(y) + ']: ' + ToStr(RemoteBuy), true);
+      Item.Sell[y] := RemoteSell;
+      gDebug('Item.Sell[' + ToStr(y) + ']: ' + ToStr(RemoteSell), true);
+      Inc(FlipNo);
+    End;
+  End;
+
+  FlipNo := 0;
+End;
+
+//******************************************************************************
+//  This procedure brings everything together.
+//******************************************************************************
+Procedure MerchLoop;
+Var
+  FlipMode : Boolean;
+  CheckStatus : Integer;
+  xpHr, xpHour : Extended;
+Begin
+  If Not CheckGEScreen or Not LoggedIn then
+    Exit;
+
+  If UpdatePrice('b') then
+    FlipMode := True else
+  Exit;
+
+  gDebug('FlipMode: ' + ToStr(FlipMode), true);
+
+  While FlipMode Do
+  Begin
+
+    MakeCompass(RandomRange(312, 316));
+
+    If Not IsMoneyPouchOpen then
+      ToggleMoneyPouch(True);
+
+    For FlipNo := 0 to FlipCount do
+    Begin
+      xpHour := TimeFromMark(TR) div 60000;
+      xpHr := XpHour div 60;
+
+      If TimeFromMark(T2UP) > 120000 then
+      Begin
+        gDebug('Updating remote progress report', true);
+        PostInfo('update_prog', '&t=buy:sell:profit:name:sellLimit' +
+                 ':buyLimit:time:ssold:gpfarmed:gphour:item_id&d=' +ToStr(Item.Buy[FlipNo])+ ':'
+                 +ToStr(Item.Sell[FlipNo])+ ':' +ToStr(Player.Profit[FlipNo])+ ':'
+                 +Players[CurrentPlayer].Name+ ':' +ToStr(TimeFromMark(STimeLimit[FlipNo]))+ ':'
+                 +ToStr(TimeFromMark(BTimeLimit[FlipNo]))+ ':' +MsToTime(TimeFromMark(TR), Time_FStop)+ ':'
+                 + ToStr(STATS_SOLD[0] + STATS_SOLD[1] + STATS_SOLD[2]) + ':' + ToStr(STATS_GOLD[0] + STATS_GOLD[1] + STATS_GOLD[2]) + ':'
+                 + ToStr(Round(STATS_GOLD[0] + STATS_GOLD[1] + STATS_GOLD[2] / xpHr)) + ':' + ToStr(FlipNo));
+        MarkTime(T2UP);
+      End;
+
+      With Player Do
+      Begin
+        CurCash := GetMoneyPouchAmount;
+        Profit := [Item.Sell[0] - Item.Buy[0], Item.Sell[1] - Item.Buy[1], Item.Sell[2] - Item.Buy[2]];
+        MaxBuyAmt := [Player.CurCash / Item.Buy[0], Player.CurCash / Item.Buy[1], Player.CurCash / Item.Buy[2]];
+      End;
+
+      If Player.MaxBuyAmt[FlipNo] > Item.MaxBuyAmt[FlipNo] then
+        Player.MaxBuyAmt[FlipNo] := Item.MaxBuyAmt[FlipNo];
+
+      {If InvEmpty and Time2Switch > SwitchTime then
+      Begin
+        gDebug('Switching world.');
+        SwitchWorld;
+        Exit;
+      End;}
+
+      Case FlipNo of
+        1:If (FlipNo > 0) and (Item.Buy[FlipNo] = 1) then
+          Begin
+            If ActiveSell or ActiveBuy then
+              UpdatePrice('b')else
+            CheckItemPrice;
+          End;
+        2:If (FlipNo > 0) and (Item.Buy[FlipNo] = 1) then
+          Begin
+            If ActiveSell or ActiveBuy then
+              UpdatePrice('b')else
+            CheckItemPrice;
+          End;
+      End
+
+      If TimeFromMark(T2ClearDebug) > 310000 then
+      Begin
+        MarkTime(T2ClearDebug);
+        ClearDebug;
+        MarkTime(T2Proggie);
+        ProgressReport;
+      End;
+
+      If GEBuyMenu or GESellMenu then
+        GoBack;
+
+      If LobbyScreen or Not LoggedIn then
+        LoginPlayer;
+
+      If Not CheckGEScreen then
+        OpenGE;
+
+      rr := RandomRange(0, 60);
+      If (rr = 20) or (rr = 45) then
+        AntiBan;
+
+      For CheckStatus := 0 to 1 do
+      Begin
+        Case CheckStatus of
+          0: CheckBuyStatus;
+          1: CheckSellStatus;
+        End;
+      End;
+
+      Wait(2500+RandomRange(-450, 450));
+
+      If ActiveBuy then
+       gDebug('Buy Limit: (' + ToStr(TimeFromMark(BTimeLimit[FlipNo])) + 'ms / ' + ToStr(Player.BuyTime[FlipNo]) + 'ms)', true);
+
+      If ActiveSell then
+       gDebug('Sell Limit: (' + ToStr(TimeFromMark(STimeLimit[FlipNo])) + 'ms / ' + ToStr(Player.SellTime[FlipNo]) + 'ms)', true);
+
+      If InvCount > 0 then
+      Begin
+        gDebug('InvCount > 0; Continuing...', true);
+        if Not CheckGEScreen then
+          GoBack;
+        Dec(FlipNo);
+        Continue;
+      End;
+    End;
+  End;
+End;
+
+//******************************************************************************
+//  Handles startup setting and repeats the MerchLoop until the player isinactive.
+//******************************************************************************
+Procedure MainLoop;
+Begin
+  Repeat
+    If Not loggedIn or LobbyScreen then
+      LoginPlayer;
+
+    MakeCompass(RandomRange(312, 316));
+    SetAngle(SRL_ANGLE_HIGH);
+
+    ChatsOff;
+
+    If GEBuyMenu or GESellMenu then
+      GoBack;
+
+    If Not CheckGEScreen then
+      OpenGE;
+
+    MerchLoop;
+  Until(AllPlayersInactive);
+End;
+
+begin
+  SMART_server := 20;
+  SMART_members := False;
+  SMART_signed := False;
+  SMART_superDetail := False;
+  Wait(500);
+
+  SetupSRL;
+  DeclarePlayers;
+  SetupItem(Players[CurrentPlayer].Strings[0]);
+  ActivateClient;
+
+  DeclareVars;
+
+  StartUpProc;
+
+  MainLoop;
+end.

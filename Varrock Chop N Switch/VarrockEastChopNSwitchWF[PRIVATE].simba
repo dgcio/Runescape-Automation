@@ -1,0 +1,1132 @@
+//******************************************************************************
+//                   **Varrock East Bank Yew Chop N' Switch**
+//
+//                    *Features*
+//                   [ + Chops the single Yew tree by the church in
+//                     Varrock then switches worlds for efficient GP/hr[43k/hr@80+]
+//                     + AntiBan
+//                     + Accurate TPA finding
+//                     + Switches Player every X minutes.
+//                     + CPU Efficient
+//                     + Waits for the Yew to respawn if just logged in.
+//                     +  ]
+//                   *Notes*
+//                   [ + Can only be used on a Signed Client.
+//                     + In the settings make sure
+//                        Remove Roofs is set to "selectively".
+//                     +  ]
+//
+//                     * Last Updated: 07-11-11 *
+//******************************************************************************
+program VarrockEastChopNSwitch;
+{$DEFINE SMART}
+{$i srl/srl.scar}
+{$i srl/srl/misc/paintsmart.scar}
+{$i srl/srl/misc/stats.simba}
+{$i Reflection_Dev/Reflection.simba}
+
+{Declare Players-------------------------------------------------------------}
+
+Procedure DeclarePlayers;
+begin
+  HowManyPlayers    := 3;         //How many players in the script.
+  CurrentPlayer     := 0;         //Current player in the Players array.
+  NumberOfPlayers(HowManyPlayers);//Don't change.
+
+  with Players[0] do
+  begin
+    Name          := '';  //Player Username
+    Pass          := '';  //Player Password
+    Active        := True;//Active?
+    Pin           := '';  //Bank Pin
+    //Anything below can be left alone
+    Loc           := 'Bank'; // 'Bank' or 'Yew'
+    Integers[0]   := 0; //How many Yew logs cut
+    Integers[1]   := 0; //How many times banked
+  end;
+
+  with Players[1] do
+  begin
+    Name          := '';  //Player Username
+    Pass          := '';  //Player Password
+    Active        := True;//Active?
+    Pin           := '';  //Bank Pin
+    //Anything below can be left alone
+    Loc           := 'Bank'; // 'Bank' or 'Yew'
+    Integers[0]   := 0;
+    Integers[1]   := 0;
+  end;
+
+  with Players[2] do
+  begin
+    Name          := '';  //Player Username
+    Pass          := '';  //Player Password
+    Active        := True;//Active?
+    Pin           := '';  //Bank Pin
+    //Anything below can be left alone
+    Loc           := 'Bank'; // 'Bank' or 'Yew'
+    Integers[0]   := 0; //bank
+    Integers[1]   := 0; //yews cut
+  end;
+end;
+
+{Script Starts here----------------------------------------------------------}
+
+  Var
+    x, y, s, t, GTr, rr, GST, GCT, GFT,
+    TimesSwitched, TimesBanked, SwitchAConvert, ScriptTime,
+    fh, WA, FileNum, AC, WWC, TimesCut,
+    AvgGP, PHYew, YewsCut, CutYews : integer;
+    IsEquip, Tp, P, FileSearch : string;
+    PathTiles : Array[0..2] of TPointArray;
+    InBox : Array[0..2] of TIntegerArray;
+    PathName, FileStr : TStringArray;
+    PathLength, TheWorlds : TIntegerArray;
+    EndTile : TTileArray;
+
+  const
+  {User Const------------------------------------------------------------------}
+    Switch = True;     //do you wish for your characters to Switch after x minutes or run until false?
+    SwitchA = 60;      //How long until switching characters, in minutes.
+    Debug = True;      //Show Debug in the bottom box?
+    ArmyNo = 1;        //For the world switcher.
+    PaintDebug = False; //do you want to see the colours the script is finding as it runs.
+    SimbaPath = 'C:/Simba/'; //Change only if you installed in a different location.
+  {SRL Stats-------------------------------------------------------------------}
+  // Sign Up Here: http://stats.villavu.com/
+    Stats_User = '';
+    Stats_Pass = '';
+
+{Script Procedures/Functions---------------------------------------------------}
+
+//******************************************************************************
+//  Reusable info for the debug in the box below.
+//  * Checked: July 29, 2011
+//******************************************************************************
+Function _Debug(text : String) : Boolean;
+begin
+  if (Debug) then
+    begin
+      Writeln('[' + ToStr(MsToTime(TimeFromMark(ScriptTime), Time_Bare)) +
+      ']::[ ' + Players[CurrentPlayer].Name + ' ]: ' + text);
+      Result := True;
+      Exit;
+    end else
+  Result := False;
+end;
+
+//******************************************************************************
+//  Get the Current Yew Log Price from The GE Database.
+//  Credit to Unknown?
+//  * Checked: July 29, 2011
+//******************************************************************************
+Function GetPrice(Name: String; Num: Integer): Integer;
+Var
+  temp: string;
+begin
+  temp:= GetPage('http://services.runescape.com/m=itemdb_rs/'+ (Name) +'/viewitem.ws?obj='+ IntToStr(Num) +'');
+  Result := strtoint(getnumbers(Between('<b>Current guide price:</b> ', '<br>', temp)));
+end;
+
+//******************************************************************************
+//  Selects a certain number of worlds. Not needed but I wanted to learn
+//  how to read/write to a .txt file.
+//  * Checked: July 29, 2011
+//******************************************************************************
+Procedure SortWorlds;
+Var
+  i : integer;
+begin
+  Tp := ToStr(TheDate(3));
+  P := ToStr(GetSystemTime);
+  TheWorlds := [4, 5, 7, 8, 10, 11, 13, 14, 16, 17, 19, 20, 25, 29, 30, +
+              33, 34, 35, 37, 38, 41, 43, 47, 49, 50, 55, 61, 62, 73, 74, 75, +
+              80, 81, 87, 90, 93, 102, 105, 106, 108, 118, 120, 123, 134, 135, +
+              141, 149, 152, 153, 154, 155, 161, 165, 167, 169]; //59 Total
+
+  CreateDirectory(SimbaPath + 'YewChopNSwitch_WF/');
+  CreateFile(SimbaPath + 'YewChopNSwitch_WF/' + ToStr(Tp) + '-' + ToStr(P) + '.txt');
+
+  For i := 1 to 3 do
+    Repeat
+      WriteFileString(0, ToStr(TheWorlds[RandomRange(1 + ArmyNo * i - 2, i * ArmyNo)]) + '|');
+      inc(i);
+    Until(i > 2);
+
+  CloseFile(0);
+End;
+
+//******************************************************************************
+//  Creates the world array.
+//  * Checked: July 29, 2011
+//******************************************************************************
+Procedure GetWorld;
+Begin
+   SortWorlds;
+   FileNum := OpenFile(SimbaPath + 'YewChopNSwitch_WF/' + ToStr(Tp) + '-' + ToStr(P) + '.txt', true);
+   FileSearch := '|';
+   ReadFileString(0, FileSearch, FileSize(FileNum));
+   CloseFile(0);
+   Writeln('WorldArray: ' + ToStr(Explode('|', FileSearch)));
+   FileStr := Explode('|', FileSearch);
+   WA := StrToInt(FileStr[0]);
+End;
+
+//******************************************************************************
+//  Checks how many players are in the world and determines whether to keep
+//  or drop the world.
+//  * Checked: July 29, 2011
+//******************************************************************************
+{Procedure CheckWorld;
+Var
+  CurWorld, i, j, PlayerAmt : Integer;
+  one, two : TIntegerArray;
+Begin
+  //Get the Player Amount
+  PlayerAmt := Length(R_GetAllPlayers)-1;
+  _Debug('PlayersInWorld: ' + ToStr(PlayerAmt));
+if (PlayerAmt <= 2) then
+  Begin
+    _Debug('WorldStatus: Good');
+    CurWorld := StrToInt(FileStr[AC]);
+      For i := 0 to 3 do
+      Repeat
+        if (CurWorld = StrToInt(FileStr[i])) then
+          Exit else
+        inc(i);
+      until(i > 2);
+    Exit;
+  End else
+_Debug('WorldStatus: Bad');
+  For j := 0 to 3 do
+  Repeat
+  _Debug(FileStr[j]);
+  _Debug(ToStr(CurWorld));
+    if (CurWorld = StrToInt(FileStr[j])) then
+    Begin
+      _Debug('Deleting World: ' + FileStr[j]);
+      DeleteValueInStrArray(FileStr, j);
+      //one := FileStr;
+      //two := TheWorlds[RandomRange(0, 59)];
+      Exit;
+    End else
+  inc(j);
+  until(j > 2);
+_Debug('CurrentWorld: ' + ToStr(WA));
+End;}
+
+//******************************************************************************
+//  Sets the camera angle, run, Chooses a random world on Login.
+//  * Checked: July 29, 2011
+//******************************************************************************
+Procedure SetupPlayer;
+begin
+  if (LobbyScreen) then LeaveLobby;
+  if (not(LoggedIn)) then LoginPlayerToLob;
+    Wait(500);
+    repeat
+      if (LoggedIn) then Break;
+      if (not (WorldScreen)) then
+      begin
+       Repeat
+        OpenWorldScreen;
+        _Debug('WorldScreen: ' + ToStr(WorldScreen));
+       Until(WorldScreen);
+      end;
+    if (not (WorldScreen)) then Break;
+      Writeln('WorldArray: ' + ToStr(Explode('|', FileSearch)));
+      WA := StrToInt(FileStr[AC]);
+      _Debug('Switching to World: ' + ToStr(WA));
+      ChangeWorld(WA);
+      WaitFunc(@LoggedIn, 100, 1000);
+    until(LoggedIn);
+  SetAngle(True);
+  _Debug('LoggedIn: ' + ToStr(LoggedIn));
+  SetChat('off', 1);
+  SetChat('off', 2);
+end;
+
+//******************************************************************************
+//  Keeps the walking Variables out of the way to
+//  * Checked: July 29, 2011
+//******************************************************************************
+Procedure SetupWalking;
+begin
+  PathLength   := [3, 3];
+  PathName     := ['Bank', 'Yew Tree'];
+  EndTile      := [Point(3253, 3421), Point(3246, 3471)]; //end tiles [Bank, Yew]
+  InBox[0]     := [3250, 3423, 3257, 3420]; //BankBox
+  InBox[1]     := [3242, 3477, 3252, 3468]; //YewBox
+  PathTiles[0] := [Point(3246, 3462), Point(3247, 3447), Point(3248, 3431)];//ToBank
+  PathTiles[1] := [Point(3247, 3431), Point(3247, 3447), Point(3245, 3458)];//ToYew
+end;
+
+//******************************************************************************
+//  Checks for random events.
+//  * Checked: July 29, 2011
+//******************************************************************************
+Function CheckforRandoms: Boolean;
+begin
+  if (R_FindRandoms) then
+    begin
+      _Debug('[*** Out of Random Event ***]');
+      _Debug('Dist[0]: ' + ToStr(R_DistanceFromTile(EndTile[0]) > 125) + ' :: Dist[1]: ' + ToStr(R_DistanceFromTile(EndTile[1]) > 125));
+      WWC := 0;
+      if (not (LoggedIn)) then
+        begin
+          _Debug('Not Logged in. Random Solver Failed.');
+          Players[CurrentPlayer].Loc := 'Stuck in a Random Event';
+          NextPlayer(False);
+        end;
+      if (R_DistanceFromTile(EndTile[0]) > 125) and (R_DistanceFromTile(EndTile[1]) > 125) then
+        begin
+          _Debug('Random Solver. False Positive Detected');
+          Players[CurrentPlayer].Loc := 'Random Solver. False Positive Detected';
+        end;
+      Result := True;
+      Exit;
+    end else
+  Result := False;
+  Exit;
+end;
+
+//******************************************************************************
+//  When Function NoYew := True Switches worlds for faster yew chopping.
+//  * Checked: July 29, 2011
+//******************************************************************************
+Procedure SwitchWorld;
+begin
+  _Debug('Switching Worlds');
+if (LoggedIn) then
+//Modified ExitToLobby for best GP/Hr | Can only be used with Signed := True;
+  begin
+    repeat
+      MouseBox(750, 5, 761, 15, 1);
+      Wait(500+Random(250));
+    until((FindText(x, y, 'obb', UpChars, MIX1, MIY1, MIX2, MIY2)));
+      Wait(100+Random(50));
+    repeat
+      MouseBox(576, 351, 704, 366, 1);
+      Wait(2000);
+    until(not (LoggedIn));
+  end;
+  Wait(500);
+  begin
+    repeat
+      if (not (WorldScreen)) then
+      begin
+        OpenWorldScreen;
+        _Debug('WorldScreen: ' + ToStr(WorldScreen));
+      end else
+    Break;
+    if (LoggedIn) then Break;
+      Writeln('WorldArray: ' + ToStr(Explode('|', FileSearch)));
+      WA := StrToInt(FileStr[AC]);
+      _Debug('Switching to World: ' + ToStr(WA));
+      ChangeWorld(WA);
+    until(LoggedIn);
+  Wait(100+Random(300));
+  _Debug('LoggedIn: ' + ToStr(LoggedIn));
+  SetAngle(True);
+  ClickToContinue; //Quick chat worlds.
+  end;
+if (CheckForRandoms) then Exit;
+Exit;
+end;
+
+//******************************************************************************
+//  Sets the time for switching players.
+//  * Checked: July 29, 2011
+//******************************************************************************
+Function SwitchTime: Boolean;
+begin
+  if (PlayersActive = 1) or (HowManyPlayers = 1) then
+    begin
+      Result := False;
+      Exit;
+    end;
+  if (not (Switch)) then Exit else
+    GST := t + SwitchAConvert;
+    GCT := GetSystemTime;
+    GFT := GST - GCT;
+  if (GFT <= 0) then
+    begin
+      Result := True;
+      Exit;
+    end else
+  Result := False;
+end;
+
+//******************************************************************************
+//  After X(GFT) minutes the script will switch players for AntiBan purposes
+//  NOTE: Can be set to false in the const field [ Switch ]
+//  * Checked: July 29, 2011
+//******************************************************************************
+Procedure SwitchPlayer;
+begin
+  MarkTime(t);
+  GCT := GetSystemTime;
+  SwitchAConvert := SwitchA * 60000 + Random(300000);
+  _Debug('Switching players.');
+  Logout;
+  Wait(500+Random(250));
+  NextPlayer(true);
+  _Debug('Logging in player: ' + Players[CurrentPlayer].Name);
+  Inc(TimesSwitched);
+  s := 1;
+  fh := 0;
+  Exit;
+end;
+
+//******************************************************************************
+//  In the event of a lost player, this will set theplayer to false and logout.
+//  * Checked: July 29, 2011
+//******************************************************************************
+Function EndPlayer(Why : string): Boolean;
+begin
+  if (CheckForRandoms) then Exit;
+  _Debug('Player is stuck in a random or lost, setting player to False.');
+  _Debug('Reason: ' + Why);
+  Players[CurrentPlayer].Loc := Why;
+  Players[CurrentPlayer].Active := False;
+  CloseWindow;
+  Logout;
+  NextPlayer(False);
+  s := 1;
+  fh := 0;
+  Result := True;
+  Exit;
+end;
+
+//******************************************************************************
+//  if rr = 5 or 15 out of a random 20 performs the AntiBan Procedure
+//  * Checked: July 29, 2011
+//******************************************************************************
+Procedure Antiban;
+begin
+GTr := RandomRange(21,37);
+_Debug('Performing AntiBan');
+  begin
+    Case Random(17) of
+      0..3 : RandomRClick;
+      3..6 : HoverSkill('Woodcutting', false);
+      7..9 : RandomMovement;
+      10..12 : GameTab(GTr);
+      13..15 : PickUpMouse;
+      16..17 : MakeCompass('rand');
+    end;
+  end;
+end;
+
+//******************************************************************************
+//  Main Screen TPA finding.
+//  * Checked: July 29, 2011
+//******************************************************************************
+Function TPAMainScreen(x, y, w, h, col, tol: Integer; hue, sat: Extended; upText: TStringArray; debug: String): Boolean;
+Var
+  CTS, i, u: Integer;
+  TPA: TPointArray;
+  ATPA: Array of TPointArray;
+begin
+  CTS := GetColorToleranceSpeed;
+  ColorToleranceSpeed(2);
+  SetColorSpeed2Modifiers(hue, sat);
+  FindColorsSpiralTolerance(MSCX, MSCY, TPA, col, MSX1, MSY1, MSX2, MSY2, tol);
+  ColorToleranceSpeed(CTS);
+  ATPA := TPAtoATPAEx(TPA, w, h); //w, h;
+
+  if (Length(TPA) < 74) then Exit;
+  _Debug('Find' + Debug + ': Begin');
+  _Debug('TPA Point Count: ' + ToStr(Length(TPA)));
+  for i := 0 to High(ATPA) do
+  begin
+    for u := 0 to 1 do
+    begin
+      repeat
+        inc(u);
+        MiddleTPAEx(ATPA[i], x, y);
+          if (PaintDebug) then SMART_DrawDotsEx(true, ATPA[i], clBlue);
+        MMouse(x, y, 10, -15);
+        Wait(250+Random(150));
+        _Debug('Finding ' + debug + ' ::: #' + IntToStr(u));
+        if(IsUpTextMultiCustom(upText)) then
+        begin
+          Result := True;
+          _Debug('Found ' + debug);
+          u := 0;
+          Exit;
+        end;
+      until(u > 0);
+   if(u > 0) then
+      begin
+        _Debug('TPAMainScreen: TimedOut');
+        //MakeCompass('rand');
+        Exit;
+      end;
+    end;
+  end;
+end;
+
+//******************************************************************************
+//  Quick way to find the stump of the tree.
+//  * Checked: July 29, 2011
+//******************************************************************************
+Function TPANoYew(w, h, col, tol: Integer; hue, sat : Extended; debug: String; showDebug : Boolean): Boolean;
+Var
+  CTS, I: Integer;
+  TPA: TPointArray;
+  ATPA: Array of TPointArray;
+
+begin
+  CTS := GetColorToleranceSpeed;
+  ColorToleranceSpeed(2);
+  SetColorSpeed2Modifiers(hue, sat);
+  FindColorsSpiralTolerance(MSCX, MSCY, TPA, col, MSX1, MSY1, MSX2, MSY2, tol);
+  ColorToleranceSpeed(CTS);
+  ATPA := TPAtoATPAEx(TPA, w, h); //w, h;
+
+  if (Length(TPA) < 11) then
+    Begin
+      if (Length(TPA) = 0) then Exit;
+      if (Not (R_TileOnMM(EndTile[1]))) then Exit;
+      if (ShowDebug) then _Debug('Not Enough Points: ' + ToStr(Length(TPA)));
+      Exit;
+    end;
+  if (ShowDebug) then _Debug('TPA Point Count: ' + ToStr(Length(TPA)));
+  for I := 0 to High(ATPA) do
+  begin
+    //MiddleTPAEx(ATPA[i], x, y);
+      if (PaintDebug) then SMART_DrawDotsEx(true, ATPA[i], clBlue);
+      if (ShowDebug) then
+    begin
+      _Debug('WaitWhileChopping: End');
+      _Debug('Found ' + debug);
+    end;
+  Result := True;
+  Exit;
+    end;
+end;
+
+//******************************************************************************
+//  Inventory TPA Finding.
+//  * Checked: July 29, 2011
+//******************************************************************************
+Function TPAInv(x, y, col, tol: Integer; hue, sat: Extended; upText: TStringArray;  debug: String): Boolean;
+Var
+  CTS, I, u: Integer;
+  TPA: TPointArray;
+  ATPA: Array of TPointArray;
+begin
+  CTS := GetColorToleranceSpeed;
+  ColorToleranceSpeed(2);
+  SetColorSpeed2Modifiers(hue, sat); // hue = H/L // sat = S/L
+  FindColorsSpiralTolerance(x, y, TPA, col, MIX1, MIY1, MIX2, MIY2, tol);
+  ColorToleranceSpeed(CTS);
+  ATPA := TPAToATPAEx(TPA, 10, 25);
+
+  if (Length(TPA) < 3) then Exit;
+  _Debug('TPA Point Count: ' + ToStr(Length(TPA)));
+  for I := 0 to High(ATPA) do
+  begin
+   for u := 0 to 1 do
+    begin
+     repeat
+      inc(u);
+      MiddleTPAEx(ATPA[i], x, y);
+       if (PaintDebug) then SMART_DrawDotsEx(true, ATPA[i], clBlue);
+      MMouse(x, y, 2, 2);
+      Wait(450+Random(45));
+      _Debug('Finding ' + debug + ' ::: #' + IntToStr(u));
+       if(IsUpTextMultiCustom(upText)) then
+      begin
+       _Debug('Found ' + debug + ' ::: #' + IntToStr(u));
+       Result := True;
+       u := 0;
+       Exit;
+      end;
+    until(u >= 1);
+   if(u >= 1) then
+    begin
+     _Debug('TPAinv: TimedOut');
+     u := 0;
+     Exit;
+    end;
+   end;
+  end;
+end;
+
+//******************************************************************************
+//  Check for the flag on the minimap when WebWalking
+//  * Checked: July 29, 2011
+//******************************************************************************
+Function NoFlag: Boolean;
+begin
+  if (CheckForRandoms) then Exit;
+ if (FlagDistance < 2) then
+  begin
+    Result := True;
+    //_Debug('FlagDistance: ' + ToStr(FlagDistance));
+    if (CheckForRandoms) then Exit;
+    Exit;
+  end else
+ Result := False;
+ if (CheckForRandoms) then Exit;
+ //_Debug('FlagDistance: ' + ToStr(FlagDistance));
+end;
+
+//******************************************************************************
+//  Checks to see if within Area
+//  * Checked: July 29, 2011
+//******************************************************************************
+Function InArea(tilex1, tiley1, tilex2, tiley2 : integer) : Boolean;
+Var
+ Box : TBox;
+begin
+  Box.x1 := tilex1; Box.y1 := tiley1;
+  Box.x2 := tilex2; Box.y2 := tiley2;
+  if (R_SelfInBox(Box)) then
+   Result := True else
+  Result := False;
+end;
+
+//******************************************************************************
+//  Finds the hatchet in the equipment(277-292) or inventory tab(294-311)
+//  * Checked: July 29, 2011
+//******************************************************************************
+Function FindHatchet : Boolean;
+Var
+ i, j, k  : integer;
+begin
+for k := 0 to 2 do
+repeat
+  for i := 0 to 1 do
+    begin
+      repeat
+        Gametab(TAB_EQUIP);
+        Wait(700+Random(140));
+        inc(i);
+      if (TPAinv(x, y, 1070453, 2, 0.11, 0.38, ['hatchet', 'hat', 'chet'], 'Hatchet[equipment]')) then
+        begin
+          IsEquip := 'E';
+          _Debug('#' + IntToStr(k) + ' ::: Hatchet is equipped[' +  IsEquip  + ']');
+          Result := True;
+          s := 2;
+          Exit;
+        end else
+      _Debug('#' + IntToStr(k) + ' ::: No hatchet equipped.');
+      Result := False;
+      until(i >= 1);
+    end;
+for j := 0 to 1 do
+  begin
+    repeat
+      Gametab(TAB_INV);
+      Wait(700+Random(140));
+      inc(j);
+        if (TPAinv(x, y, 1070453, 2, 0.11, 0.38, ['hatchet', 'hat', 'chet'], 'Hatchet[inv]')) then
+      begin
+        IsEquip := 'I';
+        _Debug('#' + IntToStr(k) + ' ::: Hatchet is in your inventory[' +  IsEquip  + ']');
+        s := 2;
+        Result := True;
+        Exit;
+      end else
+    _Debug('#' + IntToStr(k) + ' ::: Hatchet isn''t in your inventory');
+    Result := False;
+    until(j >= 1);
+  end;
+inc(k);
+until(k > 1);
+  EndPlayer('Hatchet not found.');
+  Exit;
+end;
+
+//******************************************************************************
+//  Checks to see if the Yew Tree is gone.
+//  * Checked: July 29, 2011
+//  1853019, 1852505, 1720661, 1919070, 1984864, 2050914, 16543252, 1786711, 1720146
+//******************************************************************************
+Function NoYew(ShowDebug : Boolean) : Boolean;
+begin
+ if (TPANoYew(11, 9, 1720662, 3, 0.10, 0.39, 'Yew Stump', ShowDebug)) or
+ (TPANoYew(11, 9, 1852505, 3, 0.10, 0.34, 'Yew Stump', ShowDebug)) then
+   Result := True else
+ Result := False;
+end;
+
+//******************************************************************************
+//  Walks to the either the Bank or Yew tree using R_WindWalk.
+//  * Checked: July 29, 2011
+//******************************************************************************
+Function WalkToArea(i : Integer) : Boolean;
+Var
+j, k : integer;
+begin
+  if (inArea(InBox[i][0], InBox[i][1], InBox[i][2], InBox[i][3])) then Exit;
+    _Debug('WalkTo' + Replace(PathName[i],' Tree','') + ': Begin');
+    for j := 0 to PathLength[i]-1 do //Prevents out of range
+      repeat
+        if (inArea(InBox[i][0], InBox[i][1], InBox[i][2], InBox[i][3])) then Exit;
+          repeat
+            if (CheckForRandoms) then
+              Exit;
+            if (j > PathLength[i]) then
+              Break;
+            if (R_TileOnMM(EndTile[i])) then
+              Break;
+            if (R_DistanceFromTile(PathTiles[i][j]) > 22) then
+              Begin
+                inc(j);
+                Break;
+              End;
+            _Debug('[' + ToStr(k) + '][' + ToStr(j) + '] Walking to Tile: ' + ToStr(PathTiles[i][j]) +
+                   ' :: Distance: ' + ToStr(R_DistanceFromTile(PathTiles[i][j])));
+            R_WindWalk(PathTiles[i][j]);
+            if (CheckForRandoms) then Exit;
+            rr := RandomRange(0, 15);
+            if (rr = 5) or (rr = 15) then AntiBan;
+            WaitFunc(@NoFlag, 500, 4000);
+            if (CheckForRandoms) then Exit;
+          if (k > 3) then
+            begin
+              EndPlayer('Failed to walk to ' + ToStr(PathTiles[i][j]) + ', Exiting...');
+              Exit;
+            end;
+            inc(k);
+          until(NoFlag);
+        inc(j);
+        k := 0; //resets the endplayer increment var.
+        //Wait(150+Random(150));
+      if (R_TileOnMM(EndTile[i])) then //Prevents out of range
+        begin
+          repeat
+            _Debug('[' + ToStr(k) + '][' + ToStr(j) + '] Walking to the Final Tile: ' +
+            ToStr(EndTile[i]) + ' :: Distance: ' + ToStr(R_DistanceFromTile(EndTile[i])));
+            R_WindWalk(EndTile[i]);
+            MakeCompass('N');
+            if (CheckForRandoms) then Exit;
+            WaitFunc(@NoFlag, 500, 4000);
+            Wait(700+Random(250));
+          if (inArea(InBox[i][0], InBox[i][1], InBox[i][2], InBox[i][3])) then
+            begin
+              if (CheckForRandoms) then Exit;
+              _Debug('InArea' + Replace(PathName[i],' Tree','') + 'Box: '
+              + ToStr(inArea(InBox[i][0], InBox[i][1], InBox[i][2], InBox[i][3])));
+              _Debug('WalkTo' + Replace(PathName[i],' Tree','') + ': End');
+              Players[CurrentPlayer].Loc := PathName[i];
+              Result:= True;
+              Exit;
+            end else
+          Result := False;
+          inc(k);
+            if (k > 3) then
+              begin
+                EndPlayer('Failed to walk to ' + ToStr(PathTiles[i][j]) + ', Exiting...');
+                Exit;
+              end;
+          until(inArea(InBox[i][0], InBox[i][1], InBox[i][2], InBox[i][3]));
+      end;
+    until(j > PathLength[i]-1);
+end;
+
+//******************************************************************************
+//  Finds the Yew Tree using ATPA/CTS. Very Accurate.
+//  * Checked: July 29, 2011
+//******************************************************************************
+Procedure FindYew;
+Var
+ p, i, j, OldInvCount, NewInvCount : integer;
+begin
+
+OldInvCount := InvCount;
+NewInvCount := InvCount + 1;
+
+ for j := 1 to 80 do
+  repeat
+    if (CheckForRandoms) then Exit;
+    if (InvFull) then Exit;
+    if (NoYew(False)) then
+      Begin
+        if (TimesCut > 0) then Exit else _Debug('[' + ToStr(TimesCut) + '] WaitForRespawn' );
+          repeat
+            if (LobbyScreen) Then LeaveLobby;
+            if (Not (LoggedIn)) then LoginPlayer;
+            if (TimesCut > 0) then Exit;
+            if (CheckForRandoms) then Exit;
+            Wait(1000);
+          until(not(NoYew(False)));
+        inc(TimesCut);
+        _Debug('TimesCut: ' + ToStr(TimesCut));
+      End;
+  if (TPAMainScreen(x, y, 32, 27, 1522225, 4, 0.14, 1.41, ['Yew', 'ew'], 'Yew')) then
+   begin
+     GetMousePos(x, y);
+     Mouse(x, y, 0, 0, true);
+     _Debug('Yew Tree Clicked' + ' ::: #' + IntToStr(j));
+     _Debug('OldInvCount: ' + IntToStr(OldInvCount) + ' ::: NewInvCount: ' + IntToStr(NewInvCount));
+     //CheckWorld;
+     _Debug('WaitforInvIncrease: Begin');
+     p := 0;
+     MarkTime(i);
+       repeat
+         if (DidYellowClick) then FindYew;
+         if (NoYew(False)) then
+           begin
+             _Debug('WaitForInvIncrease: End');
+             Exit;
+           end;
+         rr := RandomRange(0, 22);
+         if (rr = 5) or (rr = 22) then AntiBan;
+         if (InvFull) then Exit;
+         p := GetSystemTime - i;
+         if (p > 45000) then
+           begin
+             _Debug('WaitforInvIncrease: Timed Out');
+             _Debug('WaitTime > 45000: ' + ToStr(p > 45000) + '[' + ToStr(p) + ']');
+             p := 0;
+             FindYew;
+             Exit;
+           end else
+         wait(1000+Random(50));
+         //_Debug('WaitTime: ' + ToStr(p));
+         if (InvCount > OldInvCount) then
+           begin
+             if (InvFull) then
+              Break;
+             _Debug('InvCount[' + ToStr(InvCount) + '] > OldInvCount[' +
+             ToStr(OldInvCount) + ']: ' + ToStr(InvCount > OldInvCount));
+             _Debug('WaitforInvIncrease: End');
+             _Debug('FindYew: End');
+             inc(TimesCut);
+             Exit;
+           end;
+       until(InvCount > OldInvCount);
+     if (InvCount > OldInvCount) then Exit;
+   end else
+  if (j > 79) then
+    begin
+      EndPlayer('Failed to find Yew Tree');
+      Exit;
+    end else
+  inc(j);
+ until(j > 79);
+end;
+
+//******************************************************************************
+//  Initiates walking. Determined by InvFull or InvCount < 28
+//  * Checked: July 29, 2011
+//******************************************************************************
+Procedure StartWalk;
+begin
+  if (InvFull) then
+    begin
+      if (WalkToArea(0)) then
+        begin
+          Players[CurrentPlayer].Loc := 'Bank';
+          _Debug('Player''s Location: ' + Players[CurrentPlayer].Loc);
+          //stats_IncVariable('Times Walked', 1);
+          Exit;
+        end;
+    end else
+  if (WalkToArea(1)) then
+    begin
+      Players[CurrentPlayer].Loc := 'Yew Tree';
+      _Debug('Player''s Location: ' + Players[CurrentPlayer].Loc);
+      //stats_IncVariable('Times Walked', 1);
+      WWC := 0;
+      Exit;
+    end;
+end;
+
+//******************************************************************************
+//  Fixes a bug that causes never ending walking loop.
+//  * Checked: July 29, 2011
+//******************************************************************************
+Procedure CheckStatus;
+Var
+  i : Integer;
+begin
+For i := 0 to 5 do
+Repeat
+  if (R_DistanceFromTile(EndTile[1]) > 125) then
+    begin
+      if (not (LoggedIn)) then LoginPlayer;
+      if (LobbyScreen) then ExitToLobby;
+      _Debug('[' + ToStr(i) + '] Distance > 125[' + ToStr(R_DistanceFromTile(EndTile[1])) + ']. Checking for Randoms.');
+      if (CheckForRandoms) then Exit;
+      Wait(1000);
+      inc(i);
+    end else
+  WWC := 0;
+  StartWalk;
+  Exit;
+Until(i > 4);
+  if (i > 4) then
+    begin
+      EndPlayer('Lost in the depths of hell.');
+      Exit;
+    End;
+end;
+
+//******************************************************************************
+//  Prints out a detailed progress report.
+//  * Checked: July 29, 2011
+//******************************************************************************
+Procedure ProgressReport;
+Var
+ i, YewPrice, PriceYew : integer;
+begin
+
+ if (IsEquip = 'I') then
+  CutYews := 27 else
+  CutYews := 28;
+  YewsCut := CutYews + YewsCut;
+  IncEx(Players[CurrentPlayer].Integers[1], CutYews)
+  //stats_IncVariable('Yews Chopped', 28);
+
+ if (TimeFromMark(ScriptTime) > 3599999) then
+ PHYew := (YewsCut) div (TimeFromMark(ScriptTime) div 3600000);
+
+ YewPrice := GetPrice('Yew_logs', 1515);
+ PriceYew := YewPrice * YewsCut;
+
+ AvgGP := PHYew * YewPrice;
+
+ ClearDebug;
+ SRLRandomsReport;
+ Writeln('|---------------------------------------------|');
+ Writeln('|               Chop N'' Switch                |');
+ Writeln('|              Varrock East Yew               |');
+ Writeln('|            v0.1 | Created by Geo            |');
+ Writeln('|---------------------------------------------|');
+ Writeln('  Current Player: ' + Players[CurrentPlayer].Name);
+ Writeln('  -------------------------------------------  ');
+ Writeln('  Running for ' + TimeRunning);
+ if (PlayersActive = 1) or (HowManyPlayers = 1) then
+   begin
+     Writeln('  One Player Active ');
+   end else
+     Writeln('  Switching in ' + MsToTime(GFT, Time_formal));
+     Writeln('  Times Switched: ' + IntToStr(TimesSwitched));
+ Writeln('  Yews Cut: ' + GroupDigits(YewsCut, ',')
+ + ' | Times Banked: '  + IntToStr(TimesBanked) + ' | GP Farmed: ' + GroupDigits(PriceYew, ','));
+ Writeln('  Yews P/hr | Gold P/Hr: ' + GroupDigits(PHYew, ',') + ' | '
+ + GroupDigits(AvgGP, ',')); // Returns 0 for the first hour.
+ Writeln('|---------------------------------------------|');
+ Writeln('|                Player Reports               |');
+ Writeln('|---------------------------------------------|');
+ Writeln('|  Name  |  Loc  |  Active  |  Bank  |  Yews  |');
+ Writeln('|---------------------------------------------|');
+
+  for i := 0 to HowManyPlayers do
+  begin
+   repeat
+    Writeln('  ' + Padr(Players[i].Name, 12) + ': [ '
+    + Players[i].Loc + ' | ' + ToStr(Players[i].Active) + ' | ' +
+    ToStr(Players[i].Integers[0]) + ' | ' + GroupDigits(Players[i].Integers[1], ',') + ']');
+    inc(i);
+    if (i = HowManyPlayers) then
+      begin
+        Writeln('|---------------------------------------------|');
+        //stats_Commit;
+        Writeln('|---------------------------------------------|');
+        Exit;
+      end;
+   until(i = HowManyPlayers);
+  end;
+ Exit;
+end;
+
+//******************************************************************************
+//  Procedure to find & open the Varrock East Bank.
+//  * Checked: July 29, 2011
+//******************************************************************************
+Procedure FindOpenBank;
+Var
+ i : integer;
+begin
+ for i := 1 to 10 do
+  repeat
+  if (BankScreen) or (R_BankScreen) then Exit;
+  if (TPAMainScreen(x-5, y-5, 23, 20, 6254711, 3, 0.29, 0.52, ['ank' ,'ooth'], 'Bank')) then
+    begin
+      GetMousePos(x, y);
+      Mouse(x, y, 0, 0, false);
+      Wait(200+Random(250));
+      ChooseOptionMulti(['se-quickly', 'ank', 'anker']);
+      _Debug('Opening Bank ::: #' + ToStr(i));
+      if (PinScreen) then InPin(Players[CurrentPlayer].Pin);
+      WaitFunc(@BankScreen, 150, 2500);
+      inc(i);
+      if (CheckForRandoms) then Exit;
+      if (BankScreen) or (R_BankScreen) then Exit;
+      if (i > 9) then
+        begin
+          EndPlayer('Failed to find Bank.');
+          Exit;
+        end;
+    end;
+  until(BankScreen) or (R_BankScreen) ;
+end;
+
+//******************************************************************************
+//  Procedure to bank at the Varrock East Bank.
+//  * Checked: July 29, 2011
+//******************************************************************************
+Function DepositInv: Boolean;
+Var
+  i : Integer;
+begin
+ For i := 0 to 10 do
+  repeat
+    if (not (BankScreen)) then FindOpenBank;
+    if (TPAinv(x, y, 601149, 3, 0.06, 0.54, ['ew', 'ogs'], 'Yew log')) then
+      begin
+        if (Not(LoggedIn)) or (CheckForRandoms) then Exit;
+        GetMousePos(x, y);
+        Wait(500);
+        Mouse(x, y, 0, 0, False);
+        Wait(200+Random(250));
+        ChooseOption('Deposit-All');
+        Wait(900+Random(200));
+        _Debug('DepositExtraItems');
+        Deposit(2, 28, true);
+        Wait(200+Random(200));
+        CloseWindow;
+        Wait(200+Random(200));
+        Restuntil(40);
+        SetRun(True);
+        _Debug('InvCount: ' + ToStr(InvCount));
+        if (InvCount <= 1) then
+          Begin
+            Result := True;
+            {*Pring Progress Report*}
+            Inc(TimesBanked);
+            Inc(Players[CurrentPlayer].Integers[0]);
+            //stats_IncVariable('Times Banked', 1);
+            Wait(450+Random(250));
+            ProgressReport;
+              if (SwitchTime) then
+                Begin
+                  SwitchAConvert := SwitchA * 60000 + Random(300000); //Resets the switch time.
+                  SwitchPlayer;
+                  Exit;
+                End;
+            {*end*}
+            Exit;
+          end else
+        Result := False;
+        inc(i);
+      End;
+  until(i > 9);
+if (i > 9) then
+  begin
+    EndPlayer('Failed to Desposit Items');
+    Exit;
+  end;
+end;
+//******************************************************************************
+//  The Procedure that operates the Script.
+//  * Checked: July 29, 2011
+//******************************************************************************
+Procedure MainLoop;
+Var
+  CompPos : TStringArray;
+  i : Integer;
+begin
+  if (InvFull) then
+  begin
+    StartWalk;
+    Wait(150+Random(200));
+    FindOpenBank;
+    DepositInv;
+    Exit;
+  end else
+  if (invCount < 28) then
+  begin
+    StartWalk;
+    Wait(100+Random(150));
+    for WWC := 0 to 80 do
+      repeat
+        if (LobbyScreen) then LeaveLobby;
+        if (not (Loggedin)) or (CheckForRandoms) then Exit;
+        if (WWC = 0) or (WWC = 45) then
+          FindYew;
+        if (InvFull) then
+          Break;
+        if (NoYew(True)) then
+          begin
+            inc(AC);
+            TimesCut := 0;
+            if (AC > 1) then AC := 0;
+            SwitchWorld;
+            if (CheckForRandoms) then Exit;
+            Exit;
+          end;
+        Wait(1500);
+        if (not (inArea(InBox[1][0], InBox[1][1], InBox[1][2], InBox[1][3]))) then CheckStatus;
+        if (WWC = 1) then
+        begin
+          CompPos := ['rand', 'E', 'W', 'rand'];
+          rr := RandomRange(0, 4);
+          MakeCompass(CompPos[rr]);
+          _Debug('MakeCompass: ' + CompPos[rr]);
+          _Debug('WaitWhileChopping: Begin');
+        end;
+        i := RandomRange(0, 30);
+        if (i = 5) or (i = 25) then
+        begin
+          AntiBan;
+          _Debug('WaitWhileChopping: ' + ToStr(WWC));
+        end;
+        LevelUp;
+        if (CheckForRandoms) then Exit;
+        inc(WWC);
+      until(invFull) or (WWC > 79);
+    _Debug('WaitWhileChopping: End');
+  end;
+end;
+
+begin
+  Smart_Server := 61;
+  Smart_Members := False;
+  Smart_Signed := True; //Changing to false will makethe script useless.
+  Smart_SuperDetail := False;
+
+  SetupSRL;
+  //SetupSRLStats(155, Stats_User, Stats_Pass);
+  DeclarePlayers;
+  R_SetupRandoms;
+  R_UpdateHooks;
+  MarkTime(ScriptTime);
+  MarkTime(t);
+  SetupWalking;
+  ActivateClient;
+  SwitchTime; //Set the switch Vars
+  fh := 0;
+  GetWorld;
+  SwitchAConvert := SwitchA * 60000 + Random(300000);
+
+  repeat
+    if (LobbyScreen) then
+      Begin
+        _Debug('Lobby Screen: ' + ToStr(R_LobbyScreen));
+        LeaveLobby;
+      End;
+    if (not (LoggedIn)) then
+      SetupPlayer;
+      wait(500);
+    CheckForRandoms;
+    if (fh = 0) then
+      begin
+        FindHatchet;
+        SetupPlayer;
+        fh := 1
+      end;
+    CheckStatus;
+    MainLoop;
+  until(AllPlayersInactive);
+//DeleteINI('|', '|', ToStr(SimbaPath + 'YewChopNSwitch_WF/ ' + ToStr(Tp) + '-' + ToStr(P) + '.txt'));
+ProgressReport;
+TerminateScript;
+end.

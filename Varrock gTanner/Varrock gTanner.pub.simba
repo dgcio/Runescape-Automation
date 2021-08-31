@@ -1,0 +1,1261 @@
+program Untitled;
+{$DEFINE SMART}
+{$DEFINE CRASHSMART}
+{$I SRL/SRL.scar}
+{$I SPS/SPS.simba}
+{$I SRL/SRL/MISC/PAINTSMART.scar}
+{$i SRL\SRL\Misc\Stats.simba}
+
+{
+
+ *** Geo's Al Kharid Tanner ***
+
+  Description:
+    - Tans all kind of hide at the shop in the West of Varrock.
+
+  How to run:
+    - Make sure SPS & SRL are fully updated.
+    - Fill in the item the player is making.
+      - Strings[0] ['ITEM_LEATHER', 'ITEM_HEARDLEATHER', 'ITEM_SNAKESKIN_ONE',
+                    'ITEM_SNAKESKIN_TWO', 'ITEM_GD_LEATHER', 'ITEM_BD_LEATHER',
+                    'ITEM_RD_LEATHER', 'ITEM_BLD_LEATHER'];
+      - Loc ['Bank', 'Tanner'];
+    - Start in the bank with nothing in the inverntory and click run.
+    - Babysit For a couple loads to make sure everything is working correctly.
+    - If you find any bugs post on the thread
+      - Link:
+
+  Bugs
+    - None, that I know of.
+
+}
+
+Procedure DeclarePlayers;
+begin
+  HowManyPlayers    := 3;                    //How many players in the script.
+  CurrentPlayer     := 2;                    //Current player in the Players array.
+  NumberOfPlayers(HowManyPlayers);           //Don't change.
+
+  with Players[0] do
+  begin
+    Name          := '';                     //Player Username
+    Pass          := '';                     //Player Password
+    Active        := True;                   //Active?
+    Pin           := '';                     //Bank Pin
+    Loc           := 'Bank';                 //'Bank' or 'Tanner'
+    Strings[0]    := 'ITEM_LEATHER';         //What are you making?
+    //DO NOT CHANGE
+    Integers[0]   := 0;                      //Coins '0' = False; '1' = True
+    Integers[1]   := 0;                      //Hide  '0' = False; '1' = True
+  end;
+
+  with Players[1] do
+  begin
+    Name          := '';                     //Player Username
+    Pass          := '';                     //Player Password
+    Active        := True;                   //Active?
+    Pin           := '';                     //Bank Pin
+    Loc           := 'Bank';                 //'Bank' or 'Tanner'
+    Strings[0]    := 'ITEM_LEATHER';         //What are you making?
+    //DO NOT CHANGE
+    Integers[0]   := 0;                      //Coins '0' = False; '1' = True
+    Integers[1]   := 0;                      //Hide  '0' = False; '1' = True
+  end;
+
+  with Players[2] do
+  begin
+    Name          := '';                     //Player Username
+    Pass          := '';                     //Player Password
+    Active        := True;                   //Active?
+    Pin           := '';                     //Bank Pin
+    Loc           := 'Bank';                 //'Bank' or 'Tanner'
+    Strings[0]    := 'ITEM_LEATHER';
+    //DO NOT CHANGE
+    Integers[0]   := 0;                      //Coins '0' = False; '1' = True
+    Integers[1]   := 0;                      //Hide  '0' = False; '1' = True
+  end;
+end;
+
+const
+  SRLStats_Username = '';// Your SRL Stats Username
+  SRLStats_Password = ''; // Your SRL Stats Password
+  // SRL Stats (SignUp: http://stats.villavu.com/register)
+  Rest = True;       //Rest before banking & after tanning if energy is under 40?
+  Debug = True;      //Show script debug?
+  PaintDebug = True; //Show visual debug of what the script is looking For?
+  Switch = True;     //Switch Players after SwitchA time?
+  SwitchA = 27;      //Time in minutes before switching player
+
+type
+  TPlace = record
+    PathName : String;
+    pts, vpts : TPointArray;
+    Dist : Integer;
+    BoxCol : TColor;
+  End;
+
+type
+  TItem = record
+    Name, sName, Orig, STATS_NAME, DTM : String;
+    UpText : TStringArray;
+    BoxCoords : TIntegerArray;
+    RandX, RandY, GEid : Integer;
+  End;
+
+var
+  WTA : TPlace;
+  Item : TItem;
+  t, TR, TD, GTr, GFT, GCT,
+  CT, STATS_BNK, STATS_TND,
+  TimesSwitched, TimesBanked,
+  SwitchAConvert, HideTanned,
+  T2ClearDebug : Integer;
+  ia : TPoint;
+  OSDebug : TBitmap;
+  MBX, MIX : TIntegerArray;
+
+//******************************************************************************
+//  Put Script runtime and Current Players name next to debug.
+//  * Checked: December 5th, 2011
+//******************************************************************************
+Function gDebug(text : String) : String;
+Begin
+If (Debug) Then
+  Result := '[ ' + MsToTime(TimeFromMark(TR), TIME_BARE) + ' ]::[ ' + Players[CurrentPlayer].Name + ' ] :: ' + text;
+  Writeln(Result);
+End;
+
+//******************************************************************************
+//  Setup the walking locations needed within the script.
+//  * Checked: December 5th, 2011
+//******************************************************************************
+Procedure SetupWalking(place : String);
+Begin
+  case place of
+    'PLACE_BANK':
+      with WTA do
+      Begin
+        PathName := 'Bank';
+        pts := [Point(4565, 3005), Point(4565, 2950), Point(4575, 2915)];
+        vpts := [Point(4580, 2875), Point(4590, 2875), Point(4585, 2865)];
+        Dist := 58;
+        BoxCol := clLime;
+      End;
+
+    'PLACE_TANNER':
+      with WTA do
+      Begin
+        PathName := 'Tanner';
+        vpts := [Point(4620, 3035), Point(4625, 3030), Point(4625, 3040)];
+        pts := [Point(4560, 2940), Point(4560, 2990), Point(4590, 3020)];
+        Dist := 57;
+        BoxCol := clYellow;
+      End;
+  End;
+End;
+
+//******************************************************************************
+//  Setup the item needed within the script
+//  * Checked: December 5th, 2011
+//******************************************************************************
+Procedure SetupItem(name : String);
+Begin
+  case name of
+
+    'ITEM_COWHIDE':
+      with Item do
+      Begin
+        sName := 'ITEM_COWHIDE';
+        Name := 'Cowhide';
+        RandX := Random(7);
+        RandY := Random(9);
+        GEid := 1739;
+        UpText := ['ow', 'ide', 'owr'];
+        DTM := 'mggAAAHicY2NgYBAEYmEgVgRiaSDmAWJ2IBYAYiYg5oSKywAxNxAvmz8PKoOKRRiwA0YcGAIA8aEC3g==';
+      End;
+
+    'ITEM_LEATHER':
+      with Item do
+      Begin
+        Orig := 'ITEM_COWHIDE';
+        Name := 'Soft Leather';
+        RandX := Random(7);
+        RandY := Random(9);
+        GEid := 1741;
+        BoxCoords := [74, 84, 108, 118];
+        UpText := ['eat', 'eather', 'oft'];
+        DTM := 'mggAAAHicY2NgYBAEYmYg5gdiaSjmhfJhcmxQcVkgtjTlAJJMGFiSATtgxIEhAAB/QQFt';
+        STATS_NAME := 'Soft Leather Tanned';
+      End;
+
+    'ITEM_HARDLEATHER':
+      with Item do
+      Begin
+        Orig := 'ITEM_COWHIDE';
+        Name := 'Hard Leather';
+        RandX := RandomRange(-7, 9);
+        RandY := RandomRange(-9, 7);
+        GEid := 1743;
+        BoxCoords := [187, 86, 219, 115];
+        UpText := ['eat', 'ard', 'eather'];
+        DTM := 'mggAAAHicY2NgYBAFYm4gFgNiZSCWhfIFgZgLiFmAmB+I5YBYGojVlaWAJBMGlmTADhhxYAgAAIhRAXw=';
+        STATS_NAME := 'Hard Leather Tanned';
+      End;
+
+    'ITEM_SNAKEHIDE_ONE':
+      with Item do
+      Begin
+        sName := 'ITEM_SNAKEHIDE_ONE';
+        Name := 'SnakeHide 1';
+        GEid := 6287;
+        RandX := RandomRange(-7, 9);
+        RandY := RandomRange(-9, 7);
+        UpText := ['nake', 'ide', 'ake'];
+        DTM := 'mggAAAHicY2NgYBADYk4glgRieSBWAmJxIJaF0iB5BSDWAWJVIHZ2lmVgZ2cHYw4ODjgG6ccGGHFgCAAA2i0Chg==';
+      End;
+
+    'ITEM_SNAKEHIDE_TWO':
+      with Item do
+      Begin
+        sName := 'ITEM_SNAKEHIDE_TWO';
+        Name := 'SnakeHide 2';
+        GEid := 7801;
+        RandX := RandomRange(-7, 9);
+        RandY := RandomRange(-9, 7);
+        UpText := ['nake', 'ide', 'ake'];
+        DTM := 'mggAAAHicY2NgYJAAYk4gFgFiBSCWA2JhIPYFYjcgdgLiACCOBuIgkJivMwM7OzsYc3BwwLEkA3bAiANDAABJigPG';
+      End;
+
+    'ITEM_SNAKEKIN_ONE':
+      with Item do
+      Begin
+        Orig := 'ITEM_SNAKEHIDE_ONE';
+        Name := 'SnakeSkin 1';
+        GEid := 6289;
+        RandX := RandomRange(-7, 9);
+        RandY := RandomRange(-9, 7);
+        BoxCoords := [285, 91, 341, 129];
+        UpText := ['nake', 'kin', 'ake'];
+        DTM := 'mggAAAHicY2NgYBAHYh4glgJiFSBWAGIxIBYCYk6oHEiNIhBLALG7qw6QZMTAkgzYAaZKCIYAAK/LAfE=';
+        STATS_NAME := 'Snake (Small) Tanned';
+      End;
+
+    'ITEM_SNAKESKIN_TWO':
+      with Item do
+      Begin
+        Orig := 'ITEM_SNAKEHIDE_TWO';
+        Name := 'SnakeSkin 2';
+        GEid := 6289;
+        RandX := RandomRange(-7, 9);
+        RandY := RandomRange(-9, 7);
+        BoxCoords := [396, 90, 453, 125];
+        UpText := ['nake', 'kin', 'ake'];
+        DTM := 'mggAAAHicY2NgYJACYl4glgBiJSBWh4q5ArENFLsDcTAQe4PYrjpAkhED8zNgB5gqIRgCAB4GAx0=';
+        STATS_NAME := 'Snake (Large) Tanned';
+      End;
+
+    'ITEM_GD_HIDE':
+      with Item do
+      Begin
+        sName := 'ITEM_GD_HIDE';
+        Name := 'Green DragonHide';
+        GEid := 1753;
+        RandX := RandomRange(-7, 9);
+        RandY := RandomRange(-9, 7);
+        UpText := ['reen', 'ragon', 'ide'];
+        DTM := 'mggAAAHicY2NgYBADYnYgFgBiZSCWB2JBIK4H4mYgLgHiSiDuBuJeIOby5WFgZ2eHYw4ODjCWZMAOGHFgCAAAkmUEfw==';
+      End;
+
+    'ITEM_BD_HIDE':
+      with Item do
+      Begin
+        sName := 'ITEM_BD_HIDE';
+        Name := 'Blue DragonHide';
+        GEid := 1751;
+        RandX := RandomRange(-7, 9);
+        RandY := RandomRange(-9, 7);
+        UpText := ['lue', 'ragon', 'ide'];
+        DTM := 'mggAAAHicY2NgYBADYj4glgdiZSAWBmJ2IA4F4gQgjgPiACB2B+IQIObk9mDg4OCAY3Z2djCWZMAOGHFgCAAANFIDcg==';
+      End;
+
+    'ITEM_RD_HIDE':
+      with Item do
+      Begin
+        sName := 'ITEM_RD_HIDE';
+        Name := 'Red DragonHide';
+        GEid := 1749;
+        RandX := RandomRange(-7, 9);
+        RandY := RandomRange(-9, 7);
+        UpText := ['ed', 'ragon', 'ide'];
+        DTM := 'mggAAAHicY2NgYBCHYmUglgNiHiBmB+JVQDwHiJcC8VYg3gLEK4DYhoeDgZ2dnYGDgwOOQXxJBuyAEQeGAADoWQVm';
+      End;
+
+    'ITEM_BLD_HIDE':
+      with Item do
+      Begin
+        sName := 'ITEM_BLD_HIDE';
+        Name := 'Black DragonHide';
+        RandX := RandomRange(-7, 9);
+        RandY := RandomRange(-9, 7);
+        GEid := 1747
+        UpText := ['lack', 'ragon', 'ide'];
+        DTM := 'mggAAAHicY2NgYBADYmEgVgRiJSDmB2J2IBYHYlUgloOKcQOxDBCHBAQwcHBwgDE7OzscSzJgB4w4MAQAAN7jAps=';
+      End;
+
+    'ITEM_GD_LEATHER':
+      with Item do
+      Begin
+        Orig := 'ITEM_GD_HIDE';
+        Name := 'Green Leather';
+        GEid := 1745;
+        RandX := RandomRange(-7, 9);
+        RandY := RandomRange(-9, 7);
+        BoxCoords := [72, 217, 108, 246];
+        UpText := ['reen', 'eat', 'eather'];
+        DTM := 'mggAAAHicY2NgYJAGYkUgVgViOSAWBGIhIC4D4hwgrgHiFiBugPIZHBiwAknswgyMODAEAABorwPW';
+        STATS_NAME := 'Green Dragon Leather Tanned';
+      End;
+
+    'ITEM_BD_LEATHER':
+      with Item do
+      Begin
+        Orig := 'ITEM_BD_HIDE';
+        Name := 'Blue Leather';
+        GEid := 2505;
+        RandX := RandomRange(-7, 9);
+        RandY := RandomRange(-9, 7);
+        BoxCoords := [186, 213, 219, 246];
+        UpText := ['lue', 'eat', 'eather'];
+        DTM := 'mggAAAHicY2NgYJAFYhEgVgViFSAWB2JeIJ4PxFOAeCoQrwTiVUC8AIhZmEyAmAUDSzJgB4w4MAQAAMX1BOs=';
+        STATS_NAME := 'Blue Dragon Leather Tanned';
+      End;
+
+    'ITEM_RD_LEATHER':
+      with Item do
+      Begin
+        Orig := 'ITEM_RD_HIDE';
+        Name := 'Red Leather';
+        GEid := 2507;
+        RandX := RandomRange(-7, 9);
+        RandY := RandomRange(-9, 7);
+        BoxCoords := [302, 214, 334, 246];
+        UpText := ['ed', 'eat', 'eather'];
+        DTM := 'mggAAAHicY2NgYJAGYikgVgdiZSAWBGI+ID4HxPuB+CgQ3wDiq0B8Cog9eTiAJCMGBunFBjBVQjAEAAApEgX5';
+        STATS_NAME := 'Red Dragon Leather Tanned';
+      End;
+
+    'ITEM_BLD_LEATHER':
+      with Item do
+      Begin
+        Orig := 'ITEM_BLD_HIDE';
+        Name := 'Black Leather';
+        GEid := 2509;
+        RandX := RandomRange(-7, 9);
+        RandY := RandomRange(-9, 7);
+        BoxCoords := [409, 212, 445, 249];
+        UpText := ['lack', 'eat', 'eather'];
+        DTM := 'mggAAAHicY2NgYJAGYgEgVgFiVSCWB2JBIP4KxG+A+DUQ/wRiJkYGhn9AWlNFkQEb4MIqysDAiANDAAAt3QXv';
+        STATS_NAME := 'Black Dragon Leather Tanned';
+      End;
+
+  End;
+End;
+
+//******************************************************************************
+//  Sets the time For switching players.
+//  * Checked: December 5th, 2011
+//******************************************************************************
+Function SwitchTime : Boolean;
+Var
+  GST : Integer;
+Begin
+  If (PlayersActive = 1) or (HowManyPlayers = 1) Then
+  Begin
+    Result := False;
+    Exit;
+  End;
+  If (not (Switch)) Then Exit Else
+    GST := t + SwitchAConvert;
+    GCT := GetSystemTime;
+    GFT := GST - GCT;
+  If (GFT <= 0) Then
+  Begin
+    Result := True;
+    Exit;
+  End;
+  Result := False;
+End;
+
+//******************************************************************************
+//  After X(GFT) minutes the script will switch players For AntiBan purposes
+//  NOTE: Can be set to False in the const field [ Switch ]
+//  * Checked: December 5th, 2011
+//******************************************************************************
+Procedure SwitchPlayer;
+Begin
+  MarkTime(t);
+  GCT := GetSystemTime;
+  SwitchAConvert := SwitchA * 60000 + Random(300000);
+  gDebug('Switching players.');
+  CloseWindow;
+  Logout;
+  Wait(500+Random(250));
+  NextPlayer(True);
+  If Not LoggedIn then
+    LoginPlayer;
+  gDebug('Logging in player: ' + Players[CurrentPlayer].Name);
+  Inc(TimesSwitched);
+  Exit;
+End;
+
+//******************************************************************************
+//  In the event of a lost player, this will set theplayer to False and logout.
+//  * Checked: December 5th, 2011
+//******************************************************************************
+Procedure EndPlayer(Why : string);
+Begin
+  gDebug('EndPlayer Activated');
+  gDebug('Reason: ' + Why);
+  Players[CurrentPlayer].Loc := Why;
+  Players[CurrentPlayer].Active := False;
+  CloseWindow;
+  Logout;
+  If AllPlayersInactive then
+  Begin
+    CloseWindow;
+    LogOut;
+    TerminateScript;
+  End;
+  NextPlayer(False);
+End;
+
+//******************************************************************************
+//  Clears the visual debug off the screen, keeps it tidy.
+//  * Checked: December 5th, 2011
+//******************************************************************************
+Procedure ClearOSDebug;
+Begin
+  OSDebug := TBitmap.Create;
+  OSDebug.canvas.handle := SmartGetDebugDC;
+  clearRSCanvas(OSDebug.canvas);
+  Try
+    FreeBitmap(OSDebug);
+  Except End;
+End;
+
+//******************************************************************************
+//  Main Screen TPA finding.
+//  * Checked: December 5th, 2011
+//******************************************************************************
+Function TPAMainScreen(x, y, w, h: Integer; col, tol: TIntegerArray; hue, sat: TExtendedArray; upText: TStringArray; debug: String): Boolean;
+Var
+  CTS, i: Integer;
+  ComTPA: TPointArray;
+  TPA: Array [0..1] of TPointArray;
+  ATPA: T2DPointArray;
+Begin
+  If Not LoggedIn Then Exit;
+  FindNormalRandoms;
+  CTS := GetColorToleranceSpeed;
+  ColorToleranceSpeed(2);
+  SetColorSpeed2Modifiers(hue[0], sat[0]);
+  FindColorsSpiralTolerance(MSCX, MSCY, TPA[0], col[0], MSX1, MSY1, MSX2, MSY2, tol[0]);
+  SetColorSpeed2Modifiers(hue[1], sat[1]);
+  FindColorsSpiralTolerance(MSCX, MSCY, TPA[1], col[1], MSX1, MSY1, MSX2, MSY2, tol[1]);
+  ColorToleranceSpeed(CTS);
+  ComTPA := CombineTPA(TPA[0], TPA[1]);
+  ATPA := SplitTPAEx(ComTPA, w, h);
+
+    gDebug('Attempting to find ' + debug);
+
+  For i := 0 to High(ATPA) do
+  Begin
+    //Writeln('ATPA[' + ToStr(i) + '] Length: ' + ToStr(Length(ATPA[i])));
+    If Not LoggedIn Then Exit;
+    FindNormalRandoms;
+    MiddleTPAEx(ATPA[i], x, y);
+      If (PaintDebug) Then SMART_DrawDotsEx(True, ATPA[i], clBlue);
+    MMouse(x, y, 15, 13);
+    If(WaitUptextMulti(upText, 450)) Then
+    Begin
+      Result := True;
+      SetColorSpeed2Modifiers(0.2, 0.2);
+      gDebug(debug + ' found');
+      Exit;
+    End;
+    Wait(120+Random(250));
+    If (i > high(ATPA)-1) Then
+    Begin
+      gDebug('TPAMainScreen: TimedOut');
+      Result := False;
+      SetColorSpeed2Modifiers(0.2, 0.2);
+      continue;
+    End;
+  End;
+End;
+
+//******************************************************************************
+//  TPA finder For the Tanner.
+//  * Checked: December 5th, 2011
+//******************************************************************************
+Function TPAFindTanner(x, y, w, h: Integer; col, tol: TIntegerArray; hue, sat: TExtendedArray; upText: TStringArray; debug: String): Boolean;
+Var
+  CTS, i: Integer;
+  ComTPA: TPointArray;
+  TPA: Array [0..1] of TPointArray;
+  ATPA: T2DPointArray;
+Begin
+  If Not LoggedIn Then Exit;
+  FindNormalRandoms;
+  CTS := GetColorToleranceSpeed;
+  ColorToleranceSpeed(2);
+  SetColorSpeed2Modifiers(hue[0], sat[0]);
+  FindColorsSpiralTolerance(MSCX, MSCY, TPA[0], col[0], MSX1, MSY1, MSX2, MSY2, tol[0]);
+  SetColorSpeed2Modifiers(hue[1], sat[1]);
+  FindColorsSpiralTolerance(MSCX, MSCY, TPA[1], col[1], MSX1, MSY1, MSX2, MSY2, tol[1]);
+  ColorToleranceSpeed(CTS);
+  ComTPA := CombineTPA(TPA[0], TPA[1]);
+  If Random(2)=1 then
+    InvertTPA(ComTPA);
+  ATPA := SplitTPAEx(ComTPA, w, h);
+
+  gDebug('Attempting to find ' + debug);
+
+  For i := 0 to High(ATPA) do
+  Begin
+    If Length(ATPA[i]) = 0 Then
+    Begin
+      MMouse(MMCX, MMCY, -5, 5);
+      If WaitUpText('alk-to', 550) then
+      Begin
+        GetMousePos(x, y);
+        Mouse(x, y, 0, 0, false);
+        ChooseOption('rade Tanner');
+      End;
+    End;
+    If Not LoggedIn Then Exit;
+    FindNormalRandoms;
+    MiddleTPAEx(ATPA[i], x, y);
+      If (PaintDebug) Then SMART_DrawDotsEx(True, ATPA[i], clBlue);
+    Mouse(x, y, -8, 8, False);
+    If OptionsExist(['rade Tanner', 'alk-to'], False) Then
+    Begin
+      Result := True;
+      gDebug(debug + ' found');
+      Exit;
+    End;
+    If (i > high(ATPA)-1) Then
+    Begin
+      gDebug('TPAMainScreen: TimedOut');
+      Result := False;
+      continue;
+    End;
+  End;
+End;
+
+//******************************************************************************
+//  If rr = 5 or 15 out of a random 20 performs the AntiBan Procedure
+//  * Checked: December 5th, 2011
+//******************************************************************************
+Procedure Antiban;
+Var
+  i, x, y : Integer;
+Begin
+If Not LoggedIn Then Exit;
+FindNormalRandoms;
+GTr := RandomRange(21 ,37);
+gDebug('Performing AntiBan');
+  Begin
+    Case Random(11) of
+      0..3 :
+         For i := 0 to 1 do
+         Begin
+          GetMousePos(x, y);
+          MMouse(x+RandomRange(-300, 300), y+RandoMRange(-300, 300), 0, 0);
+          Wait(500+Random(750));
+         End;
+      4..6 : GameTab(GTr);
+      7..11 : PickUpMouse;
+    End;
+  End;
+End;
+
+//******************************************************************************
+//  Check whether the Tanner Screen is open by counting the colors in the 'X'
+//  * Checked: December 5th, 2011
+//******************************************************************************
+Function CheckTScreen : Boolean;
+Begin
+  Result := CountColor(2106925, 477, 30, 493, 46) = 6;
+End;
+
+//******************************************************************************
+//  Finds the door handle
+//  * Checked: December 5th, 2011
+//******************************************************************************
+Function FindDoor : Boolean;
+Var
+  i, x, y : Integer;
+Begin
+  For i := 0 to 6 do
+  Begin
+    If i = 0 then
+    Begin
+     If (SPS_PosOnMM(Point(4585, 3045))) and (Not SPS_GetMyPos = Point(4585, 3045))  then
+      SPS_WalkToPos(Point(4585, 3045));
+
+      MakeCompass(RandomRange(125, 160));
+      SetAngle(False);
+    End;
+
+    If TPAMainScreen(x, y, 7, 15, [736846, 603200], [2, 2], [0.08, 0.16], [0.55, 0.33], ['oor', 'lose', 'pen'], 'Door') then
+    Begin
+      If WaitUpText('lose', 500) then
+      Begin
+        gDebug('Door is open');
+        Result := True;
+        ClickNorth(True);
+        Exit;
+      End;
+      gDebug('Door isn''t open');
+      GetMousePos(x, y);
+      Mouse(x, y, 0, 0, false);
+      If ChooseOption('pen') then
+      Begin
+        gDebug('Door opened');
+        Wait(1000+Random(750));
+        Result := True;
+        ClickNorth(True);
+        Exit;
+      End;
+     Result := False;
+    End;
+  End;
+  If i > 5 then
+  Begin
+    EndPlayer('[' + ToStr(i) + '] Failed to find door');
+    Exit;
+  End;
+End;
+
+//******************************************************************************
+//  Finds the tanner using TPA/ATPAs
+//  * Checked: December 5th, 2011
+//******************************************************************************
+Function FindTanner : Boolean;
+Var
+  j, x, y : Integer;
+Begin
+  For j := 0 to 10 do
+  Begin
+
+    If CheckTScreen then
+    Begin
+      Result := True;
+      Break;
+    End;
+
+    If IsMoving then
+    Repeat
+      Wait(100+Random(50));
+    Until Not (IsMoving);
+
+    If Not LoggedIn Then Exit;
+    FindNormalRandoms;
+
+    If TPAFindTanner(x, y, 12, 12, [14661340, 2440515], [18, 2], [0.19, 0.16], [2.00, 0.29], ['alk-to', 'anner'], 'Tanner') Then
+    Begin
+      ChooseOption('rade Tanner');
+
+      If WaitFunc(@CheckTScreen, 250, 3900) Then
+      Begin
+        ClearOSDebug;
+        gDebug('Tanner Screen: True');
+        Result := True;
+        Exit;
+      End Else
+      Begin
+        gDebug('Tanner Screen: False');
+        If InIntArray([4, 6], j) then
+        Begin
+          FindDoor;
+          SetupWalking('PLACE_TANNER');
+          SPS_WalkToPos(WTA.pts[High(WTA.pts)]);
+        End;
+      End;
+    End;
+   Result := False;
+   gDebug('[' + ToStr(j) + '] Failed to find Tanner');
+   If Random(2)=1 then
+     MakeCompass(RandomRange(-25, -95)) Else
+   Wait(250+Random(450));
+
+  End;
+  If j > 9 Then
+  Begin
+    EndPlayer('Failed to find Tanner');
+    Exit;
+  End;
+End;
+
+//******************************************************************************
+//  Custom DTM Finding, with added variables.
+//  * Checked: December 5th, 2011
+//******************************************************************************
+Function FindDTMEx(ItemName : String; Section : TIntegerArray; Hover : Boolean): Boolean;
+Var
+  i, x, y, TheDTM  : Integer;
+  iBox : TBox;
+Begin
+  SetupItem(ItemName);
+  TheDTM := DTMFromString(Item.DTM)
+  SetDTMName(TheDTM, 'ADTM');
+
+  For i := 0 to 5 do
+  Begin
+    If Not LoggedIn Then Exit;
+    FindNormalRandoms;
+    If FindDTM(TheDTM, x, y, Section[0], Section[1], Section[2], Section[3]) Then
+    Try
+      iBox.x1 := x-10; iBox.x2 := x+15;
+      iBox.y1 := y+15; iBox.y2 := y-10;
+
+      If PaintDebug Then SMART_DrawBoxEx(True, iBox, clBlue);
+
+      If Not Hover Then
+      Begin
+        Result := True;
+        Exit;
+      End;
+
+      MMouse(x + Item.RandX, y - Item.RandY, 0, 0);
+
+      If WaitUptextMulti(Item.UpText, 500) Then
+      Begin
+        //gDebug('UpText: ' + ToStr(GetUpText));
+        gDebug('Found DTM: [''' + ItemName + ''']');
+
+        Result := True;
+        Exit;
+      End;
+    Finally
+      FreeDTM(TheDTM);
+    End;
+   //gDebug('UpText: ' + ToStr(GetUpText));
+   gDebug('DTM Not Found: [''' + ItemName + ''']');
+   Wait(50+Random(100));
+  End;
+  If i > 4 then
+  Begin
+    EndPlayer('Failed to Find [''' + ItemName + ''']');
+    Exit;
+  End;
+End;
+
+//******************************************************************************
+//  Places the oreder based on what the user defined For Strings[0]
+//  * Checked: December 5th, 2011
+//******************************************************************************
+Procedure PlaceOrder(WhatToTan : String);
+Var
+  i, x, y  : Integer;
+Begin
+  SetupItem(WhatToTan);
+
+  For i := 0 to 5 do
+  Begin
+    If Not LoggedIn Then Exit;
+    FindNormalRandoms;
+    If (CheckTScreen) Then
+    Begin
+      MouseBox(Item.BoxCoords[0], Item.BoxCoords[1], Item.BoxCoords[2], Item.BoxCoords[3], 3);
+      If WaitUptextMulti(Item.Uptext, 350) Then
+      Begin
+        GetMousePos(x, y);
+        Mouse(x, y, 0, 0, False);
+        ChooseOption('All');
+        Wait(700+Random(600));
+        If IsChatBoxTextBetween('got enough money to tan', clBlack, 5, 8) then
+        Begin
+          EndPlayer('Out of money');
+          Exit;
+        End;
+        If FindDTMEx(WhatToTan, MIX, False) Then
+        Begin
+          gDebug('LeatherInInv: True');
+          Exit;
+        End;
+      End Else
+      Begin
+        gDebug('Failed to place an order');
+        If FindDTMEx(WhatToTan, MIX, False) Then
+        Begin
+          gDebug('LeatherInInv: True');
+          Exit;
+        End;
+      End;
+    End;
+  End;
+End;
+
+//******************************************************************************
+//  Checks the position of the player by, checking points near the destination.
+//  * Checked: December 5th, 2011
+//******************************************************************************
+Function CheckPos(area : String): Boolean;
+Var
+  tb: TBox;
+  MyPos, P2MM, D2MM : TPoint;
+  i, g, Dist : Integer;
+Begin
+  SetupWalking(area);
+  ClearOSDebug;
+  Result := False;
+
+  For i := 0 to High(WTA.vpts) do
+  Begin
+   If Not LoggedIn Then Exit;
+   FindNormalRandoms;
+    If (SPS_PosOnMM(WTA.vpts[i])) Then
+    Begin
+      MyPos := SPS_GetMyPos;
+      P2MM := SPS_PosToMM(MyPos);
+      D2MM := SPS_PosToMM(WTA.vpts[i]);
+      tb.x1 := D2MM.x-2; tb.x2 := D2MM.x+2;
+      tb.y1 := D2MM.y+2; tb.y2 := D2MM.y-2;
+      Dist := Distance(P2MM.x, P2MM.y, D2MM.x, D2MM.y);
+      If (PaintDebug) Then SMART_DrawBoxEx(False, tb, WTA.BoxCol);
+      gDebug('[' + ToStr(g) + '] DistToPt' + ToStr(WTA.vpts[i]) + ' = ' + ToStr(Dist));
+      If Dist > 600 Then
+        Exit;
+      If (Dist > 0) and (Dist < WTA.Dist) Then
+      Begin
+        If g > 0 Then
+        Begin
+          Result := True;
+          gDebug('DistToPts: Good');
+          gDebug('Player''s Location: ' + WTA.PathName);
+          Players[CurrentPlayer].Loc := WTA.PathName;
+          Exit;
+        End;
+       inc(g);
+      End;
+    End;
+  End;
+End;
+
+//******************************************************************************
+//  Check For the flag on the minimap when WebWalking
+//  * Checked: December 5th, 2011
+//******************************************************************************
+Function NoFlag: Boolean;
+Begin
+  If Not LoggedIn Then Exit;
+  FindNormalRandoms;
+  If FlagDistance < 12 Then
+  Begin
+    Result := True;
+    //gDebug('FlagDistance: ' + ToStr(FlagDistance));
+    Exit;
+  End;
+  If GetSystemTime-TD > 35000 Then
+  Begin
+    gDebug('[TimedOut] NoFlag > 35s; Force Exit');
+    Result := True;
+    Exit;
+  End;
+ Result := False;
+ //gDebug('FlagDistance: ' + ToStr(FlagDistance));
+End;
+
+//******************************************************************************
+//  Walks to the place and checks position using SPS
+//  * Checked: December 5th, 2011
+//******************************************************************************
+Function WalkToPlace(area : String) : Boolean;
+Var
+  tb : TBox;
+  db : TPoint;
+  i, T, rr, RX, RY : Integer;
+  iWTA : TPointArray;
+Begin
+  SetupWalking(area);
+  iWTA := WTA.Pts;
+
+  If Not LoggedIn Then Exit;
+  FindNormalRandoms;
+
+  If CheckPos(area) Then
+  Begin
+    Result := True;
+    Exit;
+  End;
+  gDebug('[' + ToStr(T) + '] WalkTo' + WTA.PathName);
+
+  For T := 0 to 7 do
+  Begin
+    TD := 0;
+    MarkTime(TD);
+
+    For i := 0 to High(WTA.pts) do
+    Begin
+      If Not LoggedIn Then Exit;
+      FindNormalRandoms;
+
+      RX := RandomRange(-2, 2);
+      RY := RandomRange(-2, 2);
+      db := SPS_PosToMM(iWTA[i]);
+      tb.x1 := db.x-4; tb.x2 := db.x+4;
+      tb.y1 := db.y+4; tb.y2 := db.y-4;
+
+      gDebug('WalkToPt' + ToStr(iWTA[i]));
+
+      If SPS_PosOnMM(Point(iWTA[i].x + RX, iWTA[i].y + RY)) Then
+      Begin
+        If (PaintDebug) Then SMART_DrawBoxEx(True, tb, WTA.BoxCol);
+
+        gDebug('MMPoint(' + ToStr(db.x) + ' + ' + ToStr(RX) + ', ' + ToStr(db.y) + ' + ' + ToStr(RY) + ')');
+
+          Mouse(db.x + RX, db.y + RY, 0, 0, True);
+          Wait(100+Random(50));
+
+        while Not NoFlag do
+        Begin
+          If Not LoggedIn Then Exit;
+          FindNormalRandoms;
+          rr := RandomRange(0, 15);
+          If (rr = 4) or (rr = 9) Then AntiBan;
+          WaitFunc(@NoFlag, 350, 10000+Random(1000));
+        End;
+
+        If i > High(iWTA)-1 Then
+        Begin
+          If CheckPos(area) Then
+          Begin
+            Result := True;
+            Exit;
+          End;
+        End;
+      End else
+     gDebug('PosNotOnMM' + ToStr(iWTA[i]));
+    End;
+    If (T > 0) and (WTA.PathName = 'Bank') then
+    Begin
+      If CheckPos('PLACE_TANNER') then
+      Begin
+        If SPS_WalkToPos(Point(4585, 3035)) then
+          FindDoor;
+      End;
+    End;
+  End;
+  If T > 6 Then
+  Begin
+    EndPlayer('Failed to walk to ' + ToStr(WTA.PathName));
+    Exit;
+  End;
+End;
+
+
+//******************************************************************************
+//
+//  * Checked: December 5th, 2011
+//******************************************************************************
+Procedure CommitZeStats;
+Begin
+  Writeln('Sending your stats to Mars.');
+  stats_IncVariable('Times Banked', STATS_BNK);
+  stats_IncVariable('Loads Done', STATS_BNK);
+  SetupItem(Players[CurrentPlayer].Strings[0]);
+  stats_IncVariable(Item.STATS_NAME, STATS_TND);
+
+  Stats_Commit;
+  STATS_TND := 0;
+  STATS_BNK := 0;
+  MarkTime(CT);
+End;
+
+//******************************************************************************
+//  Prints out a detailed progress report.
+//  * Checked: December 5th, 2011
+//******************************************************************************
+Procedure ProgressReport;
+Var
+ xpHour, i : Integer;
+Begin
+
+  Inc(Players[CurrentPlayer].Integers[0]);
+  Inc(TimesBanked);
+
+  HideTanned := 28 * TimesBanked;
+  STATS_TND := STATS_TND + 27;
+  Inc(STATS_BNK);
+  Players[CurrentPlayer].Integers[1] := 28 * Players[CurrentPlayer].Integers[0];
+  xpHour := 1+(TimeFromMark(TR) div 3600000);
+
+ If TimeFromMark(T2ClearDebug) > 180000 then
+ Begin
+   ClearDebug;
+   MarkTime(T2ClearDebug);
+ End;
+ SRLRandomsReport;
+ Writeln('|---------------------------------------------|');
+ Writeln('|               Varrock gTanner               |');
+ Writeln('|            v0.1 | Created by Geo            |');
+ Writeln('|---------------------------------------------|');
+ Writeln('  Current Player: ' + Players[CurrentPlayer].Name);
+ Writeln('  -------------------------------------------  ');
+ Writeln('  Running For ' + TimeRunning);
+ If (PlayersActive = 1) or (HowManyPlayers = 1) Then
+   Begin
+     Writeln('  One Player Active ');
+   End Else
+     Writeln('  Switching in ' + MsToTime(GFT, Time_formal));
+     Writeln('  Times Switched: ' + IntToStr(TimesSwitched));
+
+ Writeln('  Hides Tanned: ' + GroupDigits(HideTanned, ',') +
+         ' | Hides P/Hr: ' + GroupDigits((HideTanned div xpHour)-1, ',') +
+         ' | Times Banked: '  + IntToStr(TimesBanked));
+ Writeln('|---------------------------------------------|');
+ Writeln('|                Player Reports               |');
+ Writeln('|---------------------------------------------|');
+ Writeln('|   Name  |  Loc  |  Active  | Bank |  Hides  |');
+ Writeln('|---------------------------------------------|');
+
+  For i := 0 to HowManyPlayers do
+  Begin
+   repeat
+    Writeln('  ' + Padr(Players[i].Name, 12) + ': [ '
+    + Players[i].Loc + ' | ' + ToStr(Players[i].Active) + ' | ' +
+    GroupDigits(Players[i].Integers[0], ',') + ' | ' + ToStr(Players[i].Integers[1]) + ']');
+    inc(i);
+    If (i = HowManyPlayers) Then
+    Begin
+      Writeln('|---------------------------------------------|');
+      //If (TimeFromMark(CT) >= 360000) Then
+        //CommitZeStats;
+      Writeln('|---------------------------------------------|');
+      Exit;
+    End;
+   Until(i = HowManyPlayers);
+  End;
+ Exit;
+End;
+
+//******************************************************************************
+//  Finds the bank using TPA/ATPA method.
+//  * Checked: December 5th, 2011
+//******************************************************************************
+Function FindOpenBank : Boolean;
+var
+  i, x, y  : Integer;
+Begin
+  If Not LoggedIn Then Exit;
+  FindNormalRandoms;
+
+  If BankScreen Then
+    Exit;
+
+  For i := 0 to 10 do
+  Begin
+    If i = 1 Then
+    Begin
+      If Not CheckPos('PLACE_BANK') then
+        WalkToPlace('PLACE_BANK');
+     MakeCompass(RandomRange(-15, -75));
+    End;
+    If i > 6 then
+    Begin
+      gDebug('Failed to find bank 6 times, reverting to SRL OpenBank.');
+      OpenBank('vwb', true, false);
+      Continue;
+    End;
+    If Not LoggedIn Then Exit;
+    FindNormalRandoms;
+    If TPAMainScreen(x, y, 12, 8, [5531245, 5927547], [2, 3], [0.34, 0.10], [0.74, 0.50], ['ank', 'ooth'], 'Bank') Then
+    Begin
+      GetMousePos(x, y);
+      Mouse(x, y, 0, 0, False);
+      ChooseOption('se-quickly');
+      If (PinScreen) Then
+        InPin(Players[CurrentPlayer].Pin);
+      If WaitFunc(@BankScreen, 500, 4500+Random(1000)) Then
+      Begin
+        gDebug('BankScreen: True');
+        ClickNorth(True);
+        Result := True;
+        Exit;
+      End;
+     gDebug('[' + ToStr(i) + '] BankScreen not visible');
+     Result := False;
+    End;
+   gDebug('[' + ToStr(i) + '] Failed to Find Bank');
+  End;
+  If (i > 9) Then
+  Begin
+    EndPlayer('Failed to Find Bank');
+    Exit;
+  End;
+End;
+
+//******************************************************************************
+//  Withdraws an item based on the var 'ItemName'.
+//  * Checked: December 5th, 2011
+//******************************************************************************
+Function ItemWithdraw(ItemName : String) : Boolean;
+Var
+  x, y  : Integer;
+Begin
+  If Not LoggedIn Then Exit;
+  FindNormalRandoms;
+
+  If BankScreen Then
+  Begin
+   SetupItem(Players[CurrentPlayer].Strings[0]);
+   SetupItem(Item.Orig);
+    If ItemName = Item.sName Then
+    Begin
+      If WaitUptextMulti(Item.UpText, 3500) Then
+      Begin
+        GetMousePos(x, y);
+        Mouse(x, y, 0, 0, False);
+        ChooseOption('ithdraw-All');
+        gDebug('Withdrawing ' + Item.Name);
+        CloseWindow;
+        ClearOSDebug;
+        Wait(500+Random(600));
+        If FindDTMEx(Item.sName, MIX, False) Then
+        Begin
+          gDebug(Item.Name + ' Withdrawn');
+          Result := True;
+          Exit;
+        End;
+       Result := False;
+      End;
+    End;
+  End;
+End;
+
+//******************************************************************************
+//  Checks If the necessary equipment exists If not Then ends the player.
+//  * Checked: December 5th, 2011
+//******************************************************************************
+Function CheckEquipment : Boolean;
+Begin
+  If Not LoggedIn Then Exit;
+  FindNormalRandoms;
+
+  If FindOpenBank or BankScreen Then
+  Begin
+    If (InvCount > 0) Then
+    Begin
+      DepositAll;
+      ProgressReport;
+    End;
+
+    SetupItem(Players[CurrentPlayer].Strings[0]);
+    SetupItem(Item.Orig);
+    If FindDTMEx(Item.sName, MBX, True) Then
+    Begin
+      gDebug('We have ' + Item.Name);
+      ItemWithdraw(Item.sName);
+      Result := True;
+      Exit;
+    End;
+   gDebug(Item.Name + ' not found');
+  End;
+End;
+
+//******************************************************************************
+//  General stuff that sets the player up.
+//  * Checked: December 5th, 2011
+//******************************************************************************
+Procedure SetupPlayer;
+Begin
+  MouseSpeed := RandomRange(16, 18);
+  If Not LoggedIn Then LoginPlayer;
+  FindNormalRandoms;
+  SetAngle(True);
+  If (Rest) Then
+  Begin
+    gDebug('Resting...');
+    RestUntil(40);
+  End;
+  SetRun(True);
+End;
+
+//******************************************************************************
+//  Brings the script together so the magic can Begin.
+//  * Checked: December 5th, 2011
+//******************************************************************************
+Procedure MainLoop;
+Begin
+  MarkTime(CT);
+  Repeat
+
+    If Not LoggedIn Then LoginPlayer;
+    FindNormalRandoms;
+
+    If (SwitchTime) Then
+    Begin
+      SwitchAConvert := SwitchA * 60000 + Random(300000); //Resets the switch time.
+      SwitchPlayer;
+    End;
+
+    If Players[CurrentPlayer].Loc = 'Bank' Then
+    Begin
+      SetupPlayer;
+      If Not CheckEquipment then
+        Continue;
+      gDebug('Tanning Process: Begin;');
+      If WalkToPlace('PLACE_TANNER') Then
+      Begin
+        Players[CurrentPlayer].Loc := 'Tanner';
+        If FindTanner Then
+          PlaceOrder(Players[CurrentPlayer].Strings[0]);
+      End;
+    End;
+
+    If Players[CurrentPlayer].Loc = 'Tanner' Then
+    Begin
+      SetupPlayer;
+      gDebug('Banking Process: Begin;');
+      WalkToPlace('PLACE_BANK');
+    End;
+
+  Until(AllPlayersInactive);
+ ProgressReport;
+ TerminateScript;
+End;
+
+Begin
+  SMART_server := 30;
+  SMART_members := False;
+  SMART_signed := True;
+  SMART_superDetail := False;
+  Wait(500);
+
+  SetupSRL;
+  DeclarePlayers;
+  ActivateClient;
+  MarkTime(t);
+  MarkTime(TR);
+  MarkTime(T2ClearDebug);
+  LoginPlayer;
+
+  ClearOSDebug;
+  SPS_Debug := False;
+  MBX := [MBX1, MBY1, MBX2, MBY2];
+  MIX := [MIX1, MIY1, MIX2, MIY2];
+  SPS_Setup(RUNESCAPE_SURFACE, ['11_6', '11_7']);
+  SwitchAConvert := SwitchA * 60000 + RandomRange(-300000, 300000);
+
+ { If (SRLStats_Username = '') Then
+    SetupSRLStats(280, 'Anonymous', 'anon1337')
+  Else
+    SetupSRLStats(280, SRLStats_Username, SRLStats_Password); }
+
+  MainLoop;
+
+  //ia := SPS_GetMyPos;
+  //Writeln(ToStr(ia));
+End.
